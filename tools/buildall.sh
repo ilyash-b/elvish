@@ -26,10 +26,10 @@
 
 if test $# != 3; then
     # Output the comment block above, stripping any leading "#" or "# "
-    sed < $0 -n '
+    sed < $0 -En '
       /^# /,/^$/{
         /^$/q
-        s/^# \?//
+        s/^# ?//
         p
       }'
     exit 1
@@ -57,7 +57,7 @@ export CGO_ENABLED=0
 main() {
     buildarch amd64 linux darwin freebsd openbsd netbsd windows
     buildarch 386   linux windows
-    buildarch arm64 linux
+    buildarch arm64 linux darwin
 }
 
 # buildarch $arch $os...

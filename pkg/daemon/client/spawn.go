@@ -1,4 +1,4 @@
-package daemon
+package client
 
 import (
 	"errors"
@@ -6,23 +6,9 @@ import (
 	"os"
 	"path/filepath"
 
+	"src.elv.sh/pkg/daemon/daemondefs"
 	"src.elv.sh/pkg/fsutil"
 )
-
-// SpawnConfig keeps configurations for spawning the daemon.
-type SpawnConfig struct {
-	// BinPath is the path to the Elvish binary itself, used when forking. This
-	// field is used only when spawning the daemon. If empty, it is
-	// automatically determined with os.Executable.
-	BinPath string
-	// DbPath is the path to the database.
-	DbPath string
-	// SockPath is the path to the socket on which the daemon will serve
-	// requests.
-	SockPath string
-	// RunDir is the directory in which to place the daemon log file.
-	RunDir string
-}
 
 // Spawn spawns a daemon process in the background by invoking BinPath, passing
 // BinPath, DbPath and SockPath as command-line arguments after resolving them
@@ -33,15 +19,10 @@ type SpawnConfig struct {
 // daemon is detached from the current terminal, so that it is not affected by
 // I/O or signals in the current terminal and keeps running after the current
 // process quits.
-func Spawn(cfg *SpawnConfig) error {
-	binPath := cfg.BinPath
-	// Determine binPath.
-	if binPath == "" {
-		bin, err := os.Executable()
-		if err != nil {
-			return errors.New("cannot find elvish: " + err.Error())
-		}
-		binPath = bin
+func Spawn(cfg *daemondefs.SpawnConfig) error {
+	binPath, err := os.Executable()
+	if err != nil {
+		return errors.New("cannot find elvish: " + err.Error())
 	}
 
 	var pathError error
@@ -70,7 +51,6 @@ func Spawn(cfg *SpawnConfig) error {
 	args := []string{
 		binPath,
 		"-daemon",
-		"-bin", binPath,
 		"-db", dbPath,
 		"-sock", sockPath,
 	}

@@ -1,6 +1,7 @@
 package vals
 
 import (
+	"math/big"
 	"os"
 	"testing"
 
@@ -22,6 +23,15 @@ func TestEqual(t *testing.T) {
 		Args(true, false).Rets(false),
 
 		Args(1.0, 1.0).Rets(true),
+		Args(1.0, 1.1).Rets(false),
+		Args("1.0", 1.0).Rets(false),
+		Args(1, 1.0).Rets(false),
+		Args(1, 1).Rets(true),
+		Args(bigInt(z), bigInt(z)).Rets(true),
+		Args(bigInt(z), 1).Rets(false),
+		Args(bigInt(z), bigInt(z1)).Rets(false),
+		Args(big.NewRat(1, 2), big.NewRat(1, 2)).Rets(true),
+		Args(big.NewRat(1, 2), 0.5).Rets(false),
 
 		Args("lorem", "lorem").Rets(true),
 		Args("lorem", "ipsum").Rets(false),

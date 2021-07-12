@@ -6,11 +6,11 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/xiaq/persistent/hashmap"
 	"src.elv.sh/pkg/eval"
 	"src.elv.sh/pkg/eval/vals"
 	"src.elv.sh/pkg/getopt"
 	"src.elv.sh/pkg/parse"
+	"src.elv.sh/pkg/persistent/hashmap"
 )
 
 //elvdoc:fn complete-getopt
@@ -110,8 +110,8 @@ func completeGetopt(fm *eval.Frame, vArgs, vOpts, vArgHandlers interface{}) erro
 	g := getopt.Getopt{Options: opts.opts, Config: getopt.GNUGetoptLong}
 	_, parsedArgs, ctx := g.Parse(args)
 
-	out := fm.OutputChan()
-	putShortOpt := func(opt *getopt.Option) {
+	out := fm.ValueOutput()
+	putShortOpt := func(opt *getopt.Option) error {
 		c := complexItem{Stem: "-" + string(opt.Short)}
 		if d, ok := opts.desc[opt]; ok {
 			if e, ok := opts.argDesc[opt]; ok {
@@ -120,9 +120,9 @@ func completeGetopt(fm *eval.Frame, vArgs, vOpts, vArgHandlers interface{}) erro
 				c.Display = c.Stem + " (" + d + ")"
 			}
 		}
-		out <- c
+		return out.Put(c)
 	}
-	putLongOpt := func(opt *getopt.Option) {
+	putLongOpt := func(opt *getopt.Option) error {
 		c := complexItem{Stem: "--" + opt.Long}
 		if d, ok := opts.desc[opt]; ok {
 			if e, ok := opts.argDesc[opt]; ok {
@@ -131,10 +131,10 @@ func completeGetopt(fm *eval.Frame, vArgs, vOpts, vArgHandlers interface{}) erro
 				c.Display = c.Stem + " (" + d + ")"
 			}
 		}
-		out <- c
+		return out.Put(c)
 	}
-	call := func(fn eval.Callable, args ...interface{}) {
-		fn.Call(fm, args, eval.NoOpts)
+	call := func(fn eval.Callable, args ...interface{}) error {
+		return fn.Call(fm, args, eval.NoOpts)
 	}
 
 	switch ctx.Type {
@@ -147,42 +147,56 @@ func completeGetopt(fm *eval.Frame, vArgs, vOpts, vArgHandlers interface{}) erro
 			argHandler = argHandlers[len(argHandlers)-1]
 		}
 		if argHandler != nil {
-			call(argHandler, ctx.Text)
-		} else {
-			// TODO(xiaq): Notify that there is no suitable argument completer.
+			return call(argHandler, ctx.Text)
 		}
+		// TODO(xiaq): Notify that there is no suitable argument completer.
 	case getopt.NewOption:
 		for _, opt := range opts.opts {
 			if opt.Short != 0 {
-				putShortOpt(opt)
+				err := putShortOpt(opt)
+				if err != nil {
+					return err
+				}
 			}
 			if opt.Long != "" {
-				putLongOpt(opt)
+				err := putLongOpt(opt)
+				if err != nil {
+					return err
+				}
 			}
 		}
 	case getopt.NewLongOption:
 		for _, opt := range opts.opts {
 			if opt.Long != "" {
-				putLongOpt(opt)
+				err := putLongOpt(opt)
+				if err != nil {
+					return err
+				}
 			}
 		}
 	case getopt.LongOption:
 		for _, opt := range opts.opts {
 			if strings.HasPrefix(opt.Long, ctx.Text) {
-				putLongOpt(opt)
+				err := putLongOpt(opt)
+				if err != nil {
+					return err
+				}
 			}
 		}
 	case getopt.ChainShortOption:
 		for _, opt := range opts.opts {
 			if opt.Short != 0 {
 				// TODO(xiaq): Loses chained options.
-				putShortOpt(opt)
+				err := putShortOpt(opt)
+				if err != nil {
+					return err
+				}
 			}
 		}
 	case getopt.OptionArgument:
 		gen := opts.argGenerator[ctx.Option.Option]
 		if gen != nil {
-			call(gen, ctx.Option.Argument)
+			return call(gen, ctx.Option.Argument)
 		}
 	}
 	return nil

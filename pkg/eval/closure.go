@@ -7,12 +7,12 @@ import (
 	"strings"
 	"unsafe"
 
-	"github.com/xiaq/persistent/hash"
 	"src.elv.sh/pkg/diag"
 	"src.elv.sh/pkg/eval/errs"
 	"src.elv.sh/pkg/eval/vals"
 	"src.elv.sh/pkg/eval/vars"
 	"src.elv.sh/pkg/parse"
+	"src.elv.sh/pkg/persistent/hash"
 )
 
 // A user-defined function in Elvish code. Each closure has its unique identity.
@@ -56,14 +56,12 @@ func (c *closure) Call(fm *Frame, args []interface{}, opts map[string]interface{
 	// Check number of arguments.
 	if c.RestArg != -1 {
 		if len(args) < len(c.ArgNames)-1 {
-			return errs.ArityMismatch{
-				What:     "arguments here",
+			return errs.ArityMismatch{What: "arguments",
 				ValidLow: len(c.ArgNames) - 1, ValidHigh: -1, Actual: len(args)}
 		}
 	} else {
 		if len(args) != len(c.ArgNames) {
-			return errs.ArityMismatch{
-				What:     "arguments here",
+			return errs.ArityMismatch{What: "arguments",
 				ValidLow: len(c.ArgNames), ValidHigh: len(c.ArgNames), Actual: len(args)}
 		}
 	}
@@ -146,7 +144,7 @@ func (c *closure) Call(fm *Frame, args []interface{}, opts map[string]interface{
 func MakeVarFromName(name string) vars.Var {
 	switch {
 	case strings.HasSuffix(name, FnSuffix):
-		val := Callable(nil)
+		val := NewGoFn("nop~", nop)
 		return vars.FromPtr(&val)
 	case strings.HasSuffix(name, NsSuffix):
 		val := (*Ns)(nil)

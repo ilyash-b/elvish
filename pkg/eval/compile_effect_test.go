@@ -3,12 +3,10 @@ package eval_test
 import (
 	"testing"
 
-	"src.elv.sh/pkg/eval/errs"
-
 	. "src.elv.sh/pkg/eval"
+	"src.elv.sh/pkg/eval/errs"
 	. "src.elv.sh/pkg/eval/evaltest"
 	"src.elv.sh/pkg/eval/vals"
-	"src.elv.sh/pkg/eval/vars"
 	"src.elv.sh/pkg/testutil"
 )
 
@@ -43,13 +41,34 @@ func TestPipeline(t *testing.T) {
 	)
 }
 
+func TestPipeline_ReaderGone(t *testing.T) {
+	// See UNIX-only tests in compile_effect_unix_test.go.
+	Test(t,
+		// Internal commands writing to byte output raises ReaderGone when the
+		// reader is exited, which is then suppressed.
+		That("while $true { echo y } | nop").DoesNothing(),
+		That(
+			"var reached = $false",
+			"{ while $true { echo y }; reached = $true } | nop",
+			"put $reached",
+		).Puts(false),
+		// Similar for value output.
+		That("while $true { put y } | nop").DoesNothing(),
+		That(
+			"var reached = $false",
+			"{ while $true { put y }; reached = $true } | nop",
+			"put $reached",
+		).Puts(false),
+	)
+}
+
 func TestCommand(t *testing.T) {
 	Test(t,
 		That("put foo").Puts("foo"),
 		// Command errors when the head is not a single value.
 		That("{put put} foo").Throws(
-			errs.ArityMismatch{
-				What: "command", ValidLow: 1, ValidHigh: 1, Actual: 2},
+			errs.ArityMismatch{What: "command",
+				ValidLow: 1, ValidHigh: 1, Actual: 2},
 			"{put put}"),
 		// Command errors when the head is not callable or string containing slash.
 		That("[] foo").Throws(
@@ -131,29 +150,27 @@ func TestCommand_Assignment(t *testing.T) {
 
 		// Assignment errors when the RHS errors.
 		That("x = [][1]").Throws(ErrorWithType(errs.OutOfRange{}), "[][1]"),
-		// Assignment errors itself.
-		That("true = 1").Throws(vars.ErrSetReadOnlyVar, "true"),
-		That("@true = 1").Throws(vars.ErrSetReadOnlyVar, "@true"),
+		// Assignment to read-only var is an error.
+		That("nil = 1").Throws(errs.SetReadOnlyVar{VarName: "nil"}, "nil"),
+		That("a true b = 1 2 3").Throws(errs.SetReadOnlyVar{VarName: "true"}, "true"),
+		That("@true = 1").Throws(errs.SetReadOnlyVar{VarName: "@true"}, "@true"),
 		// A readonly var as a target for the `except` clause should error.
-		That("try { fail reason } except nil { }").Throws(vars.ErrSetReadOnlyVar, "nil"),
+		That("try { fail reason } except nil { }").Throws(errs.SetReadOnlyVar{VarName: "nil"}, "nil"),
 		That("try { fail reason } except x { }").DoesNothing(),
 		// Evaluation of the assignability occurs at run-time so, if no exception is raised, this
 		// otherwise invalid use of `nil` is okay.
 		That("try { } except nil { }").DoesNothing(),
 		// Arity mismatch.
 		That("x = 1 2").Throws(
-			errs.ArityMismatch{
-				What:     "assignment right-hand-side",
+			errs.ArityMismatch{What: "assignment right-hand-side",
 				ValidLow: 1, ValidHigh: 1, Actual: 2},
 			"x = 1 2"),
 		That("x y = 1").Throws(
-			errs.ArityMismatch{
-				What:     "assignment right-hand-side",
+			errs.ArityMismatch{What: "assignment right-hand-side",
 				ValidLow: 2, ValidHigh: 2, Actual: 1},
 			"x y = 1"),
 		That("x y @z = 1").Throws(
-			errs.ArityMismatch{
-				What:     "assignment right-hand-side",
+			errs.ArityMismatch{What: "assignment right-hand-side",
 				ValidLow: 2, ValidHigh: -1, Actual: 1},
 			"x y @z = 1"),
 
@@ -200,6 +217,11 @@ func TestCommand_Redir(t *testing.T) {
 		// Regression test for https://src.elv.sh/issues/1010
 		That("echo abc > bytes", "each $echo~ < bytes").Prints("abc\n"),
 		That("echo def > bytes", "only-values < bytes | count").Puts(0),
+
+		// Writing value output to file throws an exception.
+		That("put foo >a").Throws(ErrNoValueOutput, "put foo >a"),
+		// Writing value output to closed port throws an exception too.
+		That("put foo >&-").Throws(ErrNoValueOutput, "put foo >&-"),
 
 		// Invalid redirection destination.
 		That("echo []> test").Throws(

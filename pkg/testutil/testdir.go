@@ -68,9 +68,6 @@ func InTempHome() (string, func()) {
 // with permission 0644), a File, or a Dir.
 type Dir map[string]interface{}
 
-// Symlink defines the target path of a symlink to be created.
-type Symlink struct{ Target string }
-
 // File describes a file to create.
 type File struct {
 	Perm    os.FileMode
@@ -91,10 +88,8 @@ func applyDir(dir Dir, prefix string) {
 		case File:
 			Must(ioutil.WriteFile(path, []byte(file.Content), file.Perm))
 		case Dir:
-			Must(os.Mkdir(path, 0755))
+			Must(os.MkdirAll(path, 0755))
 			applyDir(file, path)
-		case Symlink:
-			Must(os.Symlink(file.Target, path))
 		default:
 			panic(fmt.Sprintf("file is neither string, Dir, or Symlink: %v", file))
 		}

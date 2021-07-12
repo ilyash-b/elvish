@@ -4,10 +4,50 @@ package math
 
 import (
 	"math"
+	"math/big"
 
 	"src.elv.sh/pkg/eval"
+	"src.elv.sh/pkg/eval/errs"
+	"src.elv.sh/pkg/eval/vals"
 	"src.elv.sh/pkg/eval/vars"
 )
+
+// Ns is the namespace for the math: module.
+var Ns = eval.NsBuilder{
+	"e":  vars.NewReadOnly(math.E),
+	"pi": vars.NewReadOnly(math.Pi),
+}.AddGoFns("math:", fns).Ns()
+
+var fns = map[string]interface{}{
+	"abs":           abs,
+	"acos":          math.Acos,
+	"acosh":         math.Acosh,
+	"asin":          math.Asin,
+	"asinh":         math.Asinh,
+	"atan":          math.Atan,
+	"atanh":         math.Atanh,
+	"ceil":          ceil,
+	"cos":           math.Cos,
+	"cosh":          math.Cosh,
+	"floor":         floor,
+	"is-inf":        isInf,
+	"is-nan":        isNaN,
+	"log":           math.Log,
+	"log10":         math.Log10,
+	"log2":          math.Log2,
+	"max":           max,
+	"min":           min,
+	"pow":           pow,
+	"pow10":         pow10,
+	"round":         round,
+	"round-to-even": roundToEven,
+	"sin":           math.Sin,
+	"sinh":          math.Sinh,
+	"sqrt":          math.Sqrt,
+	"tan":           math.Tan,
+	"tanh":          math.Tanh,
+	"trunc":         trunc,
+}
 
 //elvdoc:var e
 //
@@ -15,7 +55,7 @@ import (
 // $math:e
 // ```
 //
-// The value of
+// Approximate value of
 // [`e`](https://en.wikipedia.org/wiki/E_(mathematical_constant)):
 // 2.718281.... This variable is read-only.
 
@@ -25,7 +65,7 @@ import (
 // $math:pi
 // ```
 //
-// The value of [`π`](https://en.wikipedia.org/wiki/Pi): 3.141592.... This
+// Approximate value of [`π`](https://en.wikipedia.org/wiki/Pi): 3.141592.... This
 // variable is read-only.
 
 //elvdoc:fn abs
@@ -34,31 +74,61 @@ import (
 // math:abs $number
 // ```
 //
-// Computes the absolute value `$number`. Examples:
+// Computes the absolute value `$number`. This function is exactness-preserving.
+// Examples:
 //
 // ```elvish-transcript
-// ~> math:abs 1.2
-// ▶ (float64 1.2)
-// ~> math:abs -5.3
-// ▶ (float64 5.3)
+// ~> math:abs 2
+// ▶ (num 2)
+// ~> math:abs -2
+// ▶ (num 2)
+// ~> math:abs 10000000000000000000
+// ▶ (num 10000000000000000000)
+// ~> math:abs -10000000000000000000
+// ▶ (num 10000000000000000000)
+// ~> math:abs 1/2
+// ▶ (num 1/2)
+// ~> math:abs -1/2
+// ▶ (num 1/2)
+// ~> math:abs 1.23
+// ▶ (num 1.23)
+// ~> math:abs -1.23
+// ▶ (num 1.23)
 // ```
 
-//elvdoc:fn ceil
-//
-// ```elvish
-// math:ceil $number
-// ```
-//
-// Computes the ceiling of `$number`.
-// Read the [Go documentation](https://godoc.org/math#Ceil) for the details of
-// how this behaves. Examples:
-//
-// ```elvish-transcript
-// ~> math:ceil 1.1
-// ▶ (float64 2)
-// ~> math:ceil -2.3
-// ▶ (float64 -2)
-// ```
+const (
+	maxInt = int(^uint(0) >> 1)
+	minInt = -maxInt - 1
+)
+
+var absMinInt = new(big.Int).Abs(big.NewInt(int64(minInt)))
+
+func abs(n vals.Num) vals.Num {
+	switch n := n.(type) {
+	case int:
+		if n < 0 {
+			if n == minInt {
+				return absMinInt
+			}
+			return -n
+		}
+		return n
+	case *big.Int:
+		if n.Sign() < 0 {
+			return new(big.Int).Abs(n)
+		}
+		return n
+	case *big.Rat:
+		if n.Sign() < 0 {
+			return new(big.Rat).Abs(n)
+		}
+		return n
+	case float64:
+		return math.Abs(n)
+	default:
+		panic("unreachable")
+	}
+}
 
 //elvdoc:fn acos
 //
@@ -152,6 +222,47 @@ import (
 // ▶ (float64 +Inf)
 // ```
 
+//elvdoc:fn ceil
+//
+// ```elvish
+// math:ceil $number
+// ```
+//
+// Computes the least integer greater than or equal to `$number`. This function
+// is exactness-preserving.
+//
+// The results for the special floating-point values -0.0, +0.0, -Inf, +Inf and
+// NaN are themselves.
+//
+// Examples:
+//
+// ```elvish-transcript
+// ~> math:floor 1
+// ▶ (num 1)
+// ~> math:floor 3/2
+// ▶ (num 1)
+// ~> math:floor -3/2
+// ▶ (num -2)
+// ~> math:floor 1.1
+// ▶ (num 1.0)
+// ~> math:floor -1.1
+// ▶ (num -2.0)
+// ```
+
+var (
+	big1 = big.NewInt(1)
+	big2 = big.NewInt(2)
+)
+
+func ceil(n vals.Num) vals.Num {
+	return integerize(n,
+		math.Ceil,
+		func(n *big.Rat) *big.Int {
+			q := new(big.Int).Div(n.Num(), n.Denom())
+			return q.Add(q, big1)
+		})
+}
+
 //elvdoc:fn cos
 //
 // ```elvish
@@ -187,16 +298,34 @@ import (
 // math:floor $number
 // ```
 //
-// Computes the floor of `$number`.
-// Read the [Go documentation](https://godoc.org/math#Floor) for the details of
-// how this behaves. Examples:
+// Computes the greatest integer less than or equal to `$number`. This function
+// is exactness-preserving.
+//
+// The results for the special floating-point values -0.0, +0.0, -Inf, +Inf and
+// NaN are themselves.
+//
+// Examples:
 //
 // ```elvish-transcript
+// ~> math:floor 1
+// ▶ (num 1)
+// ~> math:floor 3/2
+// ▶ (num 1)
+// ~> math:floor -3/2
+// ▶ (num -2)
 // ~> math:floor 1.1
-// ▶ (float64 1)
-// ~> math:floor -2.3
-// ▶ (float64 -3)
+// ▶ (num 1.0)
+// ~> math:floor -1.1
+// ▶ (num -2.0)
 // ```
+
+func floor(n vals.Num) vals.Num {
+	return integerize(n,
+		math.Floor,
+		func(n *big.Rat) *big.Int {
+			return new(big.Int).Div(n.Num(), n.Denom())
+		})
+}
 
 //elvdoc:fn is-inf
 //
@@ -223,6 +352,17 @@ import (
 // ▶ $true
 // ```
 
+type isInfOpts struct{ Sign int }
+
+func (opts *isInfOpts) SetDefaultOptions() { opts.Sign = 0 }
+
+func isInf(opts isInfOpts, n vals.Num) bool {
+	if f, ok := n.(float64); ok {
+		return math.IsInf(f, opts.Sign)
+	}
+	return false
+}
+
 //elvdoc:fn is-nan
 //
 // ```elvish
@@ -239,6 +379,13 @@ import (
 // ~> math:is-nan (float64 nan)
 // ▶ $true
 // ```
+
+func isNaN(n vals.Num) bool {
+	if f, ok := n.(float64); ok {
+		return math.IsNaN(f)
+	}
+	return false
+}
 
 //elvdoc:fn log
 //
@@ -291,21 +438,61 @@ import (
 // math:max $number...
 // ```
 //
-// Outputs the maximum number in the arguments. If there are no arguments
-// an exception is thrown. If any number is NaN then NaN is output.
+// Outputs the maximum number in the arguments. If there are no arguments,
+// an exception is thrown. If any number is NaN then NaN is output. This
+// function is exactness-preserving.
 //
 // Examples:
 //
 // ```elvish-transcript
-// ~> put ?(math:max)
-// ▶ ?(fail 'arity mismatch: arguments here must be 1 or more values, but is 0 values')
-// ~> math:max 3
-// ▶ (float 3)
 // ~> math:max 3 5 2
-// ▶ (float 5)
-// ~> range 100 | math:max (all)
-// ▶ (float 99)
+// ▶ (num 5)
+// ~> math:max (range 100)
+// ▶ (num 99)
+// ~> math:max 1/2 1/3 2/3
+// ▶ (num 2/3)
 // ```
+
+func max(rawNums ...vals.Num) (vals.Num, error) {
+	if len(rawNums) == 0 {
+		return nil, errs.ArityMismatch{What: "arguments", ValidLow: 1, ValidHigh: -1, Actual: 0}
+	}
+	nums := vals.UnifyNums(rawNums, 0)
+	switch nums := nums.(type) {
+	case []int:
+		n := nums[0]
+		for i := 1; i < len(nums); i++ {
+			if n < nums[i] {
+				n = nums[i]
+			}
+		}
+		return n, nil
+	case []*big.Int:
+		n := nums[0]
+		for i := 1; i < len(nums); i++ {
+			if n.Cmp(nums[i]) < 0 {
+				n = nums[i]
+			}
+		}
+		return n, nil
+	case []*big.Rat:
+		n := nums[0]
+		for i := 1; i < len(nums); i++ {
+			if n.Cmp(nums[i]) < 0 {
+				n = nums[i]
+			}
+		}
+		return n, nil
+	case []float64:
+		n := nums[0]
+		for i := 1; i < len(nums); i++ {
+			n = math.Max(n, nums[i])
+		}
+		return n, nil
+	default:
+		panic("unreachable")
+	}
+}
 
 //elvdoc:fn min
 //
@@ -314,20 +501,61 @@ import (
 // ```
 //
 // Outputs the minimum number in the arguments. If there are no arguments
-// an exception is thrown. If any number is NaN then NaN is output.
+// an exception is thrown. If any number is NaN then NaN is output. This
+// function is exactness-preserving.
 //
 // Examples:
 //
 // ```elvish-transcript
-// ~> put ?(math:min)
-// ▶ ?(fail 'arity mismatch: arguments here must be 1 or more values, but is 0 values')
-// ~> math:min 3
-// ▶ (float 3)
+// ~> math:min
+// Exception: arity mismatch: arguments must be 1 or more values, but is 0 values
+// [tty 17], line 1: math:min
 // ~> math:min 3 5 2
-// ▶ (float 2)
-// ~> range 100 | math:min (all)
-// ▶ (float 0)
+// ▶ (num 2)
+// ~> math:min 1/2 1/3 2/3
+// ▶ (num 1/3)
 // ```
+
+func min(rawNums ...vals.Num) (vals.Num, error) {
+	if len(rawNums) == 0 {
+		return nil, errs.ArityMismatch{What: "arguments", ValidLow: 1, ValidHigh: -1, Actual: 0}
+	}
+	nums := vals.UnifyNums(rawNums, 0)
+	switch nums := nums.(type) {
+	case []int:
+		n := nums[0]
+		for i := 1; i < len(nums); i++ {
+			if n > nums[i] {
+				n = nums[i]
+			}
+		}
+		return n, nil
+	case []*big.Int:
+		n := nums[0]
+		for i := 1; i < len(nums); i++ {
+			if n.Cmp(nums[i]) > 0 {
+				n = nums[i]
+			}
+		}
+		return n, nil
+	case []*big.Rat:
+		n := nums[0]
+		for i := 1; i < len(nums); i++ {
+			if n.Cmp(nums[i]) > 0 {
+				n = nums[i]
+			}
+		}
+		return n, nil
+	case []float64:
+		n := nums[0]
+		for i := 1; i < len(nums); i++ {
+			n = math.Min(n, nums[i])
+		}
+		return n, nil
+	default:
+		panic("unreachable")
+	}
+}
 
 //elvdoc:fn pow
 //
@@ -335,16 +563,77 @@ import (
 // math:pow $base $exponent
 // ```
 //
-// Output the result of raising `$base` to the power of `$exponent`. Examples:
+// Outputs the result of raising `$base` to the power of `$exponent`.
+//
+// This function produces an exact result when `$base` is exact and `$exponent`
+// is an exact integer. Otherwise it produces an inexact result.
+//
+// Examples:
 //
 // ```elvish-transcript
 // ~> math:pow 3 2
-// ▶ (float64 9)
+// ▶ (num 9)
 // ~> math:pow -2 2
-// ▶ (float64 4)
+// ▶ (num 4)
+// ~> math:pow 1/2 3
+// ▶ (num 1/8)
+// ~> math:pow 1/2 -3
+// ▶ (num 8)
+// ~> math:pow 9 1/2
+// ▶ (num 3.0)
+// ~> math:pow 12 1.1
+// ▶ (num 15.38506624784179)
 // ```
-//
-// @cf math:pow10
+
+func pow(base, exp vals.Num) vals.Num {
+	if isExact(base) && isExactInt(exp) {
+		// Produce exact result
+		switch exp {
+		case 0:
+			return 1
+		case 1:
+			return base
+		case -1:
+			return new(big.Rat).Inv(vals.PromoteToBigRat(base))
+		}
+		exp := vals.PromoteToBigInt(exp)
+		if isExactInt(base) && exp.Sign() > 0 {
+			base := vals.PromoteToBigInt(base)
+			return new(big.Int).Exp(base, exp, nil)
+		}
+		base := vals.PromoteToBigRat(base)
+		if exp.Sign() < 0 {
+			base = new(big.Rat).Inv(base)
+			exp = new(big.Int).Neg(exp)
+		}
+		return new(big.Rat).SetFrac(
+			new(big.Int).Exp(base.Num(), exp, nil),
+			new(big.Int).Exp(base.Denom(), exp, nil))
+	}
+
+	// Produce inexact result
+	basef := vals.ConvertToFloat64(base)
+	expf := vals.ConvertToFloat64(exp)
+	return math.Pow(basef, expf)
+}
+
+func isExact(n vals.Num) bool {
+	switch n.(type) {
+	case int, *big.Int, *big.Rat:
+		return true
+	default:
+		return false
+	}
+}
+
+func isExactInt(n vals.Num) bool {
+	switch n.(type) {
+	case int, *big.Int:
+		return true
+	default:
+		return false
+	}
+}
 
 //elvdoc:fn pow10
 //
@@ -352,18 +641,16 @@ import (
 // math:pow10 $exponent
 // ```
 //
-// Output the result of raising ten to the power of `$exponent` which must be
-// an integer. Note that `$exponent > 308` results in +Inf and `$exponent <
-// -323` results in zero. Examples:
+// Equivalent to `math:pow 10 $exponent`.
 //
-// ```elvish-transcript
-// ~> math:pow10 2
-// ▶ (float64 100)
-// ~> math:pow10 -3
-// ▶ (float64 0.001)
-// ```
+// This function is deprecated; use `math:pow 10 $exponent` instead.
 //
 // @cf math:pow
+
+func pow10(fm *eval.Frame, exp vals.Num) vals.Num {
+	fm.Deprecate(`the "math:pow10" command is deprecated; use "math:pow 10 $exponent" instead`, nil, 16)
+	return pow(10, exp)
+}
 
 //elvdoc:fn round
 //
@@ -371,14 +658,48 @@ import (
 // math:round $number
 // ```
 //
-// Outputs the nearest integer, rounding half away from zero.
+// Outputs the nearest integer, rounding half away from zero. This function is
+// exactness-preserving.
+//
+// The results for the special floating-point values -0.0, +0.0, -Inf, +Inf and
+// NaN are themselves.
+//
+// Examples:
 //
 // ```elvish-transcript
-// ~> math:round -1.1
-// ▶ (float64 -1)
+// ~> math:round 2
+// ▶ (num 2)
+// ~> math:round 1/3
+// ▶ (num 0)
+// ~> math:round 1/2
+// ▶ (num 1)
+// ~> math:round 2/3
+// ▶ (num 1)
+// ~> math:round -1/3
+// ▶ (num 0)
+// ~> math:round -1/2
+// ▶ (num -1)
+// ~> math:round -2/3
+// ▶ (num -1)
 // ~> math:round 2.5
-// ▶ (float64 3)
+// ▶ (num 3.0)
 // ```
+
+func round(n vals.Num) vals.Num {
+	return integerize(n,
+		math.Round,
+		func(n *big.Rat) *big.Int {
+			q, m := new(big.Int).QuoRem(n.Num(), n.Denom(), new(big.Int))
+			m = m.Mul(m, big2)
+			if m.CmpAbs(n.Denom()) < 0 {
+				return q
+			}
+			if n.Sign() < 0 {
+				return q.Sub(q, big1)
+			}
+			return q.Add(q, big1)
+		})
+}
 
 //elvdoc:fn round-to-even
 //
@@ -386,14 +707,46 @@ import (
 // math:round-to-even $number
 // ```
 //
-// Outputs the nearest integer, rounding ties to even. Examples:
+// Outputs the nearest integer, rounding ties to even. This function is
+// exactness-preserving.
+//
+// The results for the special floating-point values -0.0, +0.0, -Inf, +Inf and
+// NaN are themselves.
+//
+// Examples:
 //
 // ```elvish-transcript
-// ~> math:round-to-even -1.1
-// ▶ (float64 -1)
+// ~> math:round-to-even 2
+// ▶ (num 2)
+// ~> math:round-to-even 1/2
+// ▶ (num 0)
+// ~> math:round-to-even 3/2
+// ▶ (num 2)
+// ~> math:round-to-even 5/2
+// ▶ (num 2)
+// ~> math:round-to-even -5/2
+// ▶ (num -2)
 // ~> math:round-to-even 2.5
-// ▶ (float64 2)
+// ▶ (num 2.0)
+// ~> math:round-to-even 1.5
+// ▶ (num 2.0)
 // ```
+
+func roundToEven(n vals.Num) vals.Num {
+	return integerize(n,
+		math.RoundToEven,
+		func(n *big.Rat) *big.Int {
+			q, m := new(big.Int).QuoRem(n.Num(), n.Denom(), new(big.Int))
+			m = m.Mul(m, big2)
+			if diff := m.CmpAbs(n.Denom()); diff < 0 || diff == 0 && q.Bit(0) == 0 {
+				return q
+			}
+			if n.Sign() < 0 {
+				return q.Sub(q, big1)
+			}
+			return q.Add(q, big1)
+		})
+}
 
 //elvdoc:fn sin
 //
@@ -474,70 +827,54 @@ import (
 // math:trunc $number
 // ```
 //
-// Outputs the integer portion of `$number`.
+// Outputs the integer portion of `$number`. This function is exactness-preserving.
+//
+// The results for the special floating-point values -0.0, +0.0, -Inf, +Inf and
+// NaN are themselves.
+//
+// Examples:
 //
 // ```elvish-transcript
-// ~> math:trunc -1.1
-// ▶ (float64 -1)
-// ~> math:trunc 2.5
-// ▶ (float64 2)
+// ~> math:trunc 1
+// ▶ (num 1)
+// ~> math:trunc 3/2
+// ▶ (num 1)
+// ~> math:trunc 5/3
+// ▶ (num 1)
+// ~> math:trunc -3/2
+// ▶ (num -1)
+// ~> math:trunc -5/3
+// ▶ (num -1)
+// ~> math:trunc 1.7
+// ▶ (num 1.0)
+// ~> math:trunc -1.7
+// ▶ (num -1.0)
 // ```
 
-// Ns is the namespace for the math: module.
-var Ns = eval.NsBuilder{
-	"e":  vars.NewReadOnly(math.E),
-	"pi": vars.NewReadOnly(math.Pi),
-}.AddGoFns("math:", fns).Ns()
-
-var fns = map[string]interface{}{
-	"abs":           math.Abs,
-	"acos":          math.Acos,
-	"acosh":         math.Acosh,
-	"asin":          math.Asin,
-	"asinh":         math.Asinh,
-	"atan":          math.Atan,
-	"atanh":         math.Atanh,
-	"ceil":          math.Ceil,
-	"cos":           math.Cos,
-	"cosh":          math.Cosh,
-	"floor":         math.Floor,
-	"is-inf":        isInf,
-	"is-nan":        math.IsNaN,
-	"log":           math.Log,
-	"log10":         math.Log10,
-	"log2":          math.Log2,
-	"max":           max,
-	"min":           min,
-	"pow":           math.Pow,
-	"pow10":         math.Pow10,
-	"round":         math.Round,
-	"round-to-even": math.RoundToEven,
-	"sin":           math.Sin,
-	"sinh":          math.Sinh,
-	"sqrt":          math.Sqrt,
-	"tan":           math.Tan,
-	"tanh":          math.Tanh,
-	"trunc":         math.Trunc,
+func trunc(n vals.Num) vals.Num {
+	return integerize(n,
+		math.Trunc,
+		func(n *big.Rat) *big.Int {
+			return new(big.Int).Quo(n.Num(), n.Denom())
+		})
 }
 
-type isInfOpts struct{ Sign int }
-
-func (opts *isInfOpts) SetDefaultOptions() { opts.Sign = 0 }
-
-func isInf(opts isInfOpts, arg float64) bool {
-	return math.IsInf(arg, opts.Sign)
-}
-
-func max(num float64, nums ...float64) float64 {
-	for i := 0; i < len(nums); i++ {
-		num = math.Max(num, nums[i])
+func integerize(n vals.Num, fnFloat func(float64) float64, fnRat func(*big.Rat) *big.Int) vals.Num {
+	switch n := n.(type) {
+	case int:
+		return n
+	case *big.Int:
+		return n
+	case *big.Rat:
+		if n.Denom().IsInt64() && n.Denom().Int64() == 1 {
+			// Elvish always normalizes *big.Rat with a denominator of 1 to
+			// *big.Int, but we still try to be defensive here.
+			return n.Num()
+		}
+		return fnRat(n)
+	case float64:
+		return fnFloat(n)
+	default:
+		panic("unreachable")
 	}
-	return num
-}
-
-func min(num float64, nums ...float64) float64 {
-	for i := 0; i < len(nums); i++ {
-		num = math.Min(num, nums[i])
-	}
-	return num
 }

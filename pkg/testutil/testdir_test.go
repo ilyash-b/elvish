@@ -101,46 +101,14 @@ func TestApplyDir_CreatesDirectories(t *testing.T) {
 	testFileContent(t, "d/dd/dd1", "dd1 content")
 }
 
-func TestApplyDir_Symlinks(t *testing.T) {
-	testdir, cleanup := InTestDir()
+func TestApplyDir_AllowsExistingDirectories(t *testing.T) {
+	_, cleanup := InTestDir()
 	defer cleanup()
 
-	ApplyDir(Dir{
-		"d1": Dir{
-			"f":  "d1/f content",
-			"d2": Symlink{testdir},
-		},
-		"sf1":   Symlink{filepath.Join("d1", "f")},
-		"sd1":   Symlink{"d1"},
-		"sd2":   Symlink{string(filepath.Separator)},
-		"empty": "",
-	})
+	ApplyDir(Dir{"d": Dir{}})
+	ApplyDir(Dir{"d": Dir{"a": "content"}})
 
-	testFileContent(t, "d1/f", "d1/f content")
-	symlinkTargets := [][2]string{
-		{"d1/d2", testdir},
-		{"sd1", "d1"},
-		{"sd2", string(filepath.Separator)},
-		{"sf1", filepath.Join("d1", "f")},
-	}
-	for _, fromTo := range symlinkTargets {
-		symlink, wantTarget := fromTo[0], fromTo[1]
-		fi, err := os.Lstat(symlink)
-		if err != nil || fi.Mode()&os.ModeSymlink == 0 {
-			t.Errorf("File %v isn't a symlink: err %v\n"+
-				"os.ModeSymlink %032b\n"+
-				"fi.Mode        %032b",
-				symlink, err, os.ModeSymlink, fi.Mode())
-		}
-		gotTarget, err := filepath.EvalSymlinks(symlink)
-		if err != nil || wantTarget != gotTarget {
-			t.Errorf("Symlink %v is incorrect:\n"+
-				"Err: %v\n"+
-				"Exp: %v\n"+
-				"Act: %v",
-				symlink, err, wantTarget, gotTarget)
-		}
-	}
+	testFileContent(t, "d/a", "content")
 }
 
 func getWd() string {

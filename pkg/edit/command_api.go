@@ -1,13 +1,25 @@
 package edit
 
+// Implementation of the editor "command" mode.
+
 import (
 	"src.elv.sh/pkg/cli/mode"
 	"src.elv.sh/pkg/eval"
 )
 
-//elv:fn command:start
+//elvdoc:var command:binding
 //
-// Starts the command mode.
+// Key bindings for command mode. This is currently a very small subset of Vi
+// command mode bindings.
+//
+// @cf edit:command:start
+
+//elvdoc:fn command:start
+//
+// Enter command mode. This mode is intended to emulate Vi's command mode, but
+// it is very incomplete right now.
+//
+// @cf edit:command:binding
 
 func initCommandAPI(ed *Editor, ev *eval.Evaler, nb eval.NsBuilder) {
 	bindingVar := newBindingVar(emptyBindingsMap)

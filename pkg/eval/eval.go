@@ -9,14 +9,14 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/xiaq/persistent/vector"
-	"src.elv.sh/pkg/daemon"
+	"src.elv.sh/pkg/daemon/daemondefs"
 	"src.elv.sh/pkg/diag"
 	"src.elv.sh/pkg/env"
 	"src.elv.sh/pkg/eval/vals"
 	"src.elv.sh/pkg/eval/vars"
 	"src.elv.sh/pkg/logutil"
 	"src.elv.sh/pkg/parse"
+	"src.elv.sh/pkg/persistent/vector"
 )
 
 var logger = logutil.GetLogger("[eval] ")
@@ -80,14 +80,13 @@ type Evaler struct {
 	// Dependencies.
 	//
 	// TODO: Remove these dependency by providing more general extension points.
-	daemonClient daemon.Client
-	editor       Editor
+	daemonClient daemondefs.Client
 }
 
 // Editor is the interface that the line editor has to satisfy. It is needed so
 // that this package does not depend on the edit package.
 type Editor interface {
-	Notify(string, ...interface{})
+	RunAfterCommandHooks(src parse.Source, duration float64, err error)
 }
 
 //elvdoc:var after-chdir
@@ -333,24 +332,17 @@ func (ev *Evaler) AddAfterChdir(f func(string)) {
 }
 
 // SetDaemonClient sets the daemon client associated with the Evaler.
-func (ev *Evaler) SetDaemonClient(client daemon.Client) {
+func (ev *Evaler) SetDaemonClient(client daemondefs.Client) {
 	ev.mu.Lock()
 	defer ev.mu.Unlock()
 	ev.daemonClient = client
 }
 
 // DaemonClient returns the daemon client associated with the Evaler.
-func (ev *Evaler) DaemonClient() daemon.Client {
+func (ev *Evaler) DaemonClient() daemondefs.Client {
 	ev.mu.RLock()
 	defer ev.mu.RUnlock()
 	return ev.daemonClient
-}
-
-// Editor returns the editor associated with the Evaler.
-func (ev *Evaler) Editor() Editor {
-	ev.mu.RLock()
-	defer ev.mu.RUnlock()
-	return ev.editor
 }
 
 // Chdir changes the current directory. On success it also updates the PWD

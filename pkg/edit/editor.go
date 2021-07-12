@@ -14,7 +14,7 @@ import (
 	"src.elv.sh/pkg/eval/vals"
 	"src.elv.sh/pkg/eval/vars"
 	"src.elv.sh/pkg/parse"
-	"src.elv.sh/pkg/store"
+	"src.elv.sh/pkg/store/storedefs"
 )
 
 // Editor is the interactive line editor for Elvish.
@@ -24,6 +24,10 @@ type Editor struct {
 
 	excMutex sync.RWMutex
 	excList  vals.List
+
+	// Maybe move this to another type that represents the REPL cycle as a whole, not just the
+	// read/edit portion represented by the Editor type.
+	AfterCommand []func(src parse.Source, duration float64, err error)
 }
 
 // An interface that wraps notifyf and notifyError. It is only implemented by
@@ -37,7 +41,7 @@ type notifier interface {
 // NewEditor creates a new editor. The TTY is used for input and output. The
 // Evaler is used for syntax highlighting, completion, and calling callbacks.
 // The Store is used for saving and retrieving command and directory history.
-func NewEditor(tty cli.TTY, ev *eval.Evaler, st store.Store) *Editor {
+func NewEditor(tty cli.TTY, ev *eval.Evaler, st storedefs.Store) *Editor {
 	// Declare the Editor with a nil App first; some initialization functions
 	// require a notifier as an argument, but does not use it immediately.
 	ed := &Editor{excList: vals.EmptyList}
@@ -46,7 +50,7 @@ func NewEditor(tty cli.TTY, ev *eval.Evaler, st store.Store) *Editor {
 
 	hs, err := newHistStore(st)
 	if err != nil {
-		// TODO(xiaq): Report the error.
+		_ = err // TODO(xiaq): Report the error.
 	}
 
 	initHighlighter(&appSpec, ev)
@@ -68,6 +72,7 @@ func NewEditor(tty cli.TTY, ev *eval.Evaler, st store.Store) *Editor {
 	initInstant(ed, ev, nb)
 	initMinibuf(ed, ev, nb)
 
+	initRepl(ed, ev, nb)
 	initBufferBuiltins(ed.app, nb)
 	initTTYBuiltins(ed.app, tty, nb)
 	initMiscBuiltins(ed.app, nb)
@@ -75,7 +80,7 @@ func NewEditor(tty cli.TTY, ev *eval.Evaler, st store.Store) *Editor {
 	initStoreAPI(ed.app, nb, hs)
 
 	ed.ns = nb.Ns()
-	evalDefaultBinding(ev, ed.ns)
+	initElvishState(ev, ed.ns)
 
 	return ed
 }
@@ -89,8 +94,9 @@ func initExceptionsAPI(ed *Editor, nb eval.NsBuilder) {
 	nb.Add("exceptions", vars.FromPtrWithMutex(&ed.excList, &ed.excMutex))
 }
 
-func evalDefaultBinding(ev *eval.Evaler, ns *eval.Ns) {
-	src := parse.Source{Name: "[default bindings]", Code: defaultBindingsElv}
+// Initialize the `edit` module by executing the pre-defined Elvish code for the module.
+func initElvishState(ev *eval.Evaler, ns *eval.Ns) {
+	src := parse.Source{Name: "[RC file]", Code: elvInit}
 	err := ev.Eval(src, eval.EvalCfg{Global: ns})
 	if err != nil {
 		panic(err)
@@ -100,6 +106,13 @@ func evalDefaultBinding(ev *eval.Evaler, ns *eval.Ns) {
 // ReadCode reads input from the user.
 func (ed *Editor) ReadCode() (string, error) {
 	return ed.app.ReadCode()
+}
+
+// RunAfterCommandHooks runs callbacks involving the interactive completion of a command line.
+func (ed *Editor) RunAfterCommandHooks(src parse.Source, duration float64, err error) {
+	for _, f := range ed.AfterCommand {
+		f(src, duration, err)
+	}
 }
 
 // Ns returns a namespace for manipulating the editor from Elvish code.

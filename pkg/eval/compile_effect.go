@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"sync/atomic"
 
 	"src.elv.sh/pkg/diag"
 	"src.elv.sh/pkg/eval/errs"
@@ -75,11 +76,6 @@ func (op *pipelineOp) exec(fm *Frame) Exception {
 		fm.intCh = nil
 		fm.background = true
 		fm.Evaler.addNumBgJobs(1)
-
-		if fm.Evaler.Editor() != nil {
-			// TODO: Redirect output in interactive mode so that the line
-			// editor does not get messed up.
-		}
 	}
 
 	nforms := len(op.subops)
@@ -92,12 +88,13 @@ func (op *pipelineOp) exec(fm *Frame) Exception {
 
 	// For each form, create a dedicated evalCtx and run asynchronously
 	for i, formOp := range op.subops {
-		hasChanInput := i > 0
 		newFm := fm.fork("[form op]")
-		if i > 0 {
+		inputIsPipe := i > 0
+		outputIsPipe := i < nforms-1
+		if inputIsPipe {
 			newFm.ports[0] = nextIn
 		}
-		if i < nforms-1 {
+		if outputIsPipe {
 			// Each internal port pair consists of a (byte) pipe pair and a
 			// channel.
 			// os.Pipe sets O_CLOEXEC, which is what we want.
@@ -106,28 +103,34 @@ func (op *pipelineOp) exec(fm *Frame) Exception {
 				return fm.errorpf(op, "failed to create pipe: %s", e)
 			}
 			ch := make(chan interface{}, pipelineChanBufferSize)
+			sendStop := make(chan struct{})
+			sendError := new(error)
+			readerGone := new(int32)
 			newFm.ports[1] = &Port{
-				File: writer, Chan: ch, closeFile: true, closeChan: true}
+				File: writer, Chan: ch,
+				closeFile: true, closeChan: true,
+				sendStop: sendStop, sendError: sendError, readerGone: readerGone}
 			nextIn = &Port{
-				File: reader, Chan: ch, closeFile: true, closeChan: false}
+				File: reader, Chan: ch,
+				closeFile: true, closeChan: false,
+				// Store in input port for ease of retrieval later
+				sendStop: sendStop, sendError: sendError, readerGone: readerGone}
 		}
 		thisOp := formOp
 		thisExc := &excs[i]
 		go func() {
 			exc := thisOp.exec(newFm)
-			newFm.Close()
-			if exc != nil {
+			if exc != nil && !(outputIsPipe && isReaderGone(exc)) {
 				*thisExc = exc
 			}
-			wg.Done()
-			if hasChanInput {
-				// If the command has channel input, drain it. This
-				// mitigates the effect of erroneous pipelines like
-				// "range 100 | cat"; without draining the pipeline will
-				// lock up.
-				for range newFm.InputChan() {
-				}
+			if inputIsPipe {
+				input := newFm.ports[0]
+				*input.sendError = errs.ReaderGone{}
+				close(input.sendStop)
+				atomic.StoreInt32(input.readerGone, 1)
 			}
+			newFm.Close()
+			wg.Done()
 		}()
 	}
 
@@ -142,18 +145,18 @@ func (op *pipelineOp) exec(fm *Frame) Exception {
 				msg += ", errors = " + err.Error()
 			}
 			if fm.Evaler.getNotifyBgJobSuccess() || err != nil {
-				editor := fm.Evaler.Editor()
-				if editor != nil {
-					editor.Notify("%s", msg)
-				} else {
-					fm.ErrorFile().WriteString(msg + "\n")
-				}
+				fm.ErrorFile().WriteString(msg + "\n")
 			}
 		}()
 		return nil
 	}
 	wg.Wait()
 	return fm.errorp(op, MakePipelineError(excs))
+}
+
+func isReaderGone(exc Exception) bool {
+	_, ok := exc.Reason().(errs.ReaderGone)
+	return ok
 }
 
 func (cp *compiler) formOp(n *parse.Form) effectOp {
@@ -472,21 +475,6 @@ type invalidFD struct{ fd int }
 
 func (err invalidFD) Error() string { return fmt.Sprintf("invalid fd: %d", err.fd) }
 
-// Returns a suitable dummy value for the channel part of the port when
-// redirecting from or to a file, so that the read and write attempts fail
-// silently (instead of blocking or panicking).
-//
-// TODO: Instead of letting read and write attempts fail silently, consider
-// raising an exception instead.
-func chanForFileRedir(mode parse.RedirMode) chan interface{} {
-	if mode == parse.Read {
-		// ClosedChan produces no values when reading.
-		return ClosedChan
-	}
-	// BlackholeChan discards all values written to it.
-	return BlackholeChan
-}
-
 func (op *redirOp) exec(fm *Frame) Exception {
 	var dst int
 	if op.dstOp == nil {
@@ -519,7 +507,9 @@ func (op *redirOp) exec(fm *Frame) Exception {
 		switch {
 		case src == -1:
 			// close
-			fm.ports[dst] = &Port{}
+			fm.ports[dst] = &Port{
+				// Ensure that writing to value output throws an exception
+				sendStop: closedSendStop, sendError: &ErrNoValueOutput}
 		case src >= len(fm.ports) || fm.ports[src] == nil:
 			return fm.errorp(op, invalidFD{src})
 		default:
@@ -537,9 +527,9 @@ func (op *redirOp) exec(fm *Frame) Exception {
 		if err != nil {
 			return fm.errorpf(op, "failed to open file %s: %s", vals.Repr(src, vals.NoPretty), err)
 		}
-		fm.ports[dst] = &Port{File: f, closeFile: true, Chan: chanForFileRedir(op.mode)}
+		fm.ports[dst] = fileRedirPort(op.mode, f, true)
 	case vals.File:
-		fm.ports[dst] = &Port{File: src, closeFile: false, Chan: chanForFileRedir(op.mode)}
+		fm.ports[dst] = fileRedirPort(op.mode, src, false)
 	case vals.Pipe:
 		var f *os.File
 		switch op.mode {
@@ -550,13 +540,31 @@ func (op *redirOp) exec(fm *Frame) Exception {
 		default:
 			return fm.errorpf(op, "can only use < or > with pipes")
 		}
-		fm.ports[dst] = &Port{File: f, closeFile: false, Chan: chanForFileRedir(op.mode)}
+		fm.ports[dst] = fileRedirPort(op.mode, f, false)
 	default:
 		return fm.errorp(op.srcOp, errs.BadValue{
 			What:  "redirection source",
 			Valid: "string, file or pipe", Actual: vals.Kind(src)})
 	}
 	return nil
+}
+
+// Creates a port that only have a file component, populating the
+// channel-related fields with suitable values depending on the redirection
+// mode.
+func fileRedirPort(mode parse.RedirMode, f *os.File, closeFile bool) *Port {
+	if mode == parse.Read {
+		return &Port{
+			File: f, closeFile: closeFile,
+			// ClosedChan produces no values when reading.
+			Chan: ClosedChan,
+		}
+	}
+	return &Port{
+		File: f, closeFile: closeFile,
+		// Throws errValueOutputIsClosed when writing.
+		Chan: nil, sendStop: closedSendStop, sendError: &ErrNoValueOutput,
+	}
 }
 
 // Makes the size of *ports at least n, adding nil's if necessary.

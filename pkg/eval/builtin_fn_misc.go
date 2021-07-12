@@ -8,7 +8,6 @@ import (
 	"io/ioutil"
 	"math/rand"
 	"net"
-	"strconv"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -16,6 +15,11 @@ import (
 	"src.elv.sh/pkg/diag"
 	"src.elv.sh/pkg/eval/vals"
 	"src.elv.sh/pkg/parse"
+)
+
+var (
+	ErrNegativeSleepDuration = errors.New("sleep duration must be >= zero")
+	ErrInvalidSleepDuration  = errors.New("invalid sleep duration")
 )
 
 // Builtins that have not been put into their own groups go here.
@@ -84,11 +88,15 @@ func nop(opts RawOptions, args ...interface{}) {
 //
 // The terminology and definition of "kind" is subject to change.
 
-func kindOf(fm *Frame, args ...interface{}) {
-	out := fm.OutputChan()
+func kindOf(fm *Frame, args ...interface{}) error {
+	out := fm.ValueOutput()
 	for _, a := range args {
-		out <- vals.Kind(a)
+		err := out.Put(vals.Kind(a))
+		if err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 //elvdoc:fn constantly
@@ -127,11 +135,15 @@ func constantly(args ...interface{}) Callable {
 	// TODO(xiaq): Repr of this function is not right.
 	return NewGoFn(
 		"created by constantly",
-		func(fm *Frame) {
-			out := fm.OutputChan()
+		func(fm *Frame) error {
+			out := fm.ValueOutput()
 			for _, v := range args {
-				out <- v
+				err := out.Put(v)
+				if err != nil {
+					return err
+				}
 			}
+			return nil
 		},
 	)
 }
@@ -393,27 +405,26 @@ var TimeAfter = func(fm *Frame, d time.Duration) <-chan time.Time {
 // ```
 
 func sleep(fm *Frame, duration interface{}) error {
+	var f float64
 	var d time.Duration
 
-	switch duration := duration.(type) {
-	case float64:
-		d = time.Duration(float64(time.Second) * duration)
-	case string:
-		f, err := strconv.ParseFloat(duration, 64)
-		if err == nil { // it's a simple number assumed to have units == seconds
-			d = time.Duration(float64(time.Second) * f)
-		} else {
+	if err := vals.ScanToGo(duration, &f); err == nil {
+		d = time.Duration(f * float64(time.Second))
+	} else {
+		// See if it is a duration string rather than a simple number.
+		switch duration := duration.(type) {
+		case string:
 			d, err = time.ParseDuration(duration)
 			if err != nil {
-				return errors.New("invalid sleep duration")
+				return ErrInvalidSleepDuration
 			}
+		default:
+			return ErrInvalidSleepDuration
 		}
-	default:
-		return errors.New("invalid sleep duration")
 	}
 
 	if d < 0 {
-		return fmt.Errorf("sleep duration must be >= zero")
+		return ErrNegativeSleepDuration
 	}
 
 	select {
@@ -473,7 +484,10 @@ func timeCmd(fm *Frame, opts timeOpt, f Callable) error {
 			err = errCb
 		}
 	} else {
-		fmt.Fprintln(fm.OutputFile(), dt)
+		_, errWrite := fmt.Fprintln(fm.ByteOutput(), dt)
+		if err == nil {
+			err = errWrite
+		}
 	}
 
 	return err
@@ -494,9 +508,12 @@ func _ifaddrs(fm *Frame) error {
 	if err != nil {
 		return err
 	}
-	out := fm.OutputChan()
+	out := fm.ValueOutput()
 	for _, addr := range addrs {
-		out <- addr.String()
+		err := out.Put(addr.String())
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }

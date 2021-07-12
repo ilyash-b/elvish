@@ -6,17 +6,12 @@ import (
 	"reflect"
 	"unsafe"
 
-	"github.com/xiaq/persistent/hash"
 	"src.elv.sh/pkg/eval/errs"
 	"src.elv.sh/pkg/eval/vals"
+	"src.elv.sh/pkg/persistent/hash"
 )
 
 var (
-	// ErrArgs is thrown when a Go function gets erroneous arguments.
-	//
-	// TODO(xiaq): Replace this single error type with multiple types that carry
-	// richer error information.
-	ErrArgs = errors.New("args error")
 	// ErrNoOptAccepted is thrown when a Go function that does not accept any
 	// options gets passed options.
 	ErrNoOptAccepted = errors.New("function does not accept any options")
@@ -152,25 +147,20 @@ func (b *goFn) Repr(int) string {
 // *error and use Elem to obtain type of error.
 var errorType = reflect.TypeOf((*error)(nil)).Elem()
 
-var errNoOptions = errors.New("function does not accept any options")
-
 // Call calls the implementation using reflection.
 func (b *goFn) Call(f *Frame, args []interface{}, opts map[string]interface{}) error {
 	if b.variadicArg != nil {
 		if len(args) < len(b.normalArgs) {
-			return errs.ArityMismatch{
-				What:     "arguments here",
+			return errs.ArityMismatch{What: "arguments",
 				ValidLow: len(b.normalArgs), ValidHigh: -1, Actual: len(args)}
 		}
 	} else if b.inputs {
 		if len(args) != len(b.normalArgs) && len(args) != len(b.normalArgs)+1 {
-			return errs.ArityMismatch{
-				What:     "arguments here",
+			return errs.ArityMismatch{What: "arguments",
 				ValidLow: len(b.normalArgs), ValidHigh: len(b.normalArgs) + 1, Actual: len(args)}
 		}
 	} else if len(args) != len(b.normalArgs) {
-		return errs.ArityMismatch{
-			What:     "arguments here",
+		return errs.ArityMismatch{What: "arguments",
 			ValidLow: len(b.normalArgs), ValidHigh: len(b.normalArgs), Actual: len(args)}
 	}
 	if !b.rawOptions && b.options == nil && len(opts) > 0 {
@@ -208,7 +198,7 @@ func (b *goFn) Call(f *Frame, args []interface{}, opts map[string]interface{}) e
 		ptr := reflect.New(typ)
 		err := vals.ScanToGo(arg, ptr.Interface())
 		if err != nil {
-			return fmt.Errorf("wrong type of %d'th argument: %v", i+1, err)
+			return fmt.Errorf("wrong type of argument %d: %v", i, err)
 		}
 		in = append(in, ptr.Elem())
 	}
@@ -234,18 +224,22 @@ func (b *goFn) Call(f *Frame, args []interface{}, opts map[string]interface{}) e
 		in = append(in, reflect.ValueOf(inputs))
 	}
 
-	outs := reflect.ValueOf(b.impl).Call(in)
+	rets := reflect.ValueOf(b.impl).Call(in)
 
-	if len(outs) > 0 && outs[len(outs)-1].Type() == errorType {
-		err := outs[len(outs)-1].Interface()
+	if len(rets) > 0 && rets[len(rets)-1].Type() == errorType {
+		err := rets[len(rets)-1].Interface()
 		if err != nil {
 			return err.(error)
 		}
-		outs = outs[:len(outs)-1]
+		rets = rets[:len(rets)-1]
 	}
 
-	for _, out := range outs {
-		f.OutputChan() <- vals.FromGo(out.Interface())
+	out := f.ValueOutput()
+	for _, ret := range rets {
+		err := out.Put(vals.FromGo(ret.Interface()))
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }

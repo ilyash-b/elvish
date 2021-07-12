@@ -10,9 +10,9 @@ import (
 	"src.elv.sh/pkg/diag"
 	. "src.elv.sh/pkg/eval"
 
-	"github.com/xiaq/persistent/hash"
 	. "src.elv.sh/pkg/eval/evaltest"
 	"src.elv.sh/pkg/eval/vals"
+	"src.elv.sh/pkg/persistent/hash"
 	"src.elv.sh/pkg/tt"
 )
 
@@ -45,7 +45,16 @@ func TestException(t *testing.T) {
 }
 
 func makeException(cause error, entries ...*diag.Context) Exception {
-	return NewException(cause, MakeStackTrace(entries...))
+	return NewException(cause, makeStackTrace(entries...))
+}
+
+// Creates a new StackTrace, using the first entry as the head.
+func makeStackTrace(entries ...*diag.Context) *StackTrace {
+	var s *StackTrace
+	for i := len(entries) - 1; i >= 0; i-- {
+		s = &StackTrace{Head: entries[i], Next: s}
+	}
+	return s
 }
 
 func TestFlow_Fields(t *testing.T) {

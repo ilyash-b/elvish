@@ -92,11 +92,15 @@ func init() {
 // ▶ '[&k=v]'
 // ```
 
-func toString(fm *Frame, args ...interface{}) {
-	out := fm.OutputChan()
+func toString(fm *Frame, args ...interface{}) error {
+	out := fm.ValueOutput()
 	for _, a := range args {
-		out <- vals.ToString(a)
+		err := out.Put(vals.ToString(a))
+		if err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 //elvdoc:fn base
@@ -132,9 +136,12 @@ func base(fm *Frame, b int, nums ...int) error {
 		return ErrBadBase
 	}
 
-	out := fm.OutputChan()
+	out := fm.ValueOutput()
 	for _, num := range nums {
-		out <- strconv.FormatInt(int64(num), b)
+		err := out.Put(strconv.FormatInt(int64(num), b))
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -147,8 +154,9 @@ var eawkWordSep = regexp.MustCompile("[ \t]+")
 // eawk $f $input-list?
 // ```
 //
-// For each input, call `$f` with the input followed by all its fields. The
-// function may call `break` and `continue`.
+// For each input, call `$f` with the input followed by all its fields. A
+// [`break`](./builtin.html#break) command will cause `eawk` to stop processing inputs. A
+// [`continue`](./builtin.html#continue) command will exit $f, but is ignored by `eawk`.
 //
 // It should behave the same as the following functions:
 //

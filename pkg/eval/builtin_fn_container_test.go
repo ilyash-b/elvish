@@ -59,19 +59,14 @@ func TestRange(t *testing.T) {
 		// non-positive int step
 		That("range &step=0 10").
 			Throws(errs.BadValue{What: "step", Valid: "positive", Actual: "0"}),
+		thatOutputErrorIsBubbled("range 1"),
 
-		That("range 10_000_000_000_000_000_000 10_000_000_000_000_000_003").
-			Puts(
-				vals.ParseNum("10_000_000_000_000_000_000"),
-				vals.ParseNum("10_000_000_000_000_000_001"),
-				vals.ParseNum("10_000_000_000_000_000_002")),
-		That("range 10_000_000_000_000_000_000 10_000_000_000_000_000_003 &step=2").
-			Puts(
-				vals.ParseNum("10_000_000_000_000_000_000"),
-				vals.ParseNum("10_000_000_000_000_000_002")),
+		That("range "+z+" "+z3).Puts(bigInt(z), bigInt(z1), bigInt(z2)),
+		That("range "+z+" "+z3+" &step=2").Puts(bigInt(z), bigInt(z2)),
 		// non-positive bigint step
 		That("range &step=-"+z+" 10").
 			Throws(errs.BadValue{What: "step", Valid: "positive", Actual: "-" + z}),
+		thatOutputErrorIsBubbled("range "+z+" "+z1),
 
 		That("range 23/10").Puts(0, 1, 2),
 		That("range 1/10 23/10").Puts(
@@ -81,6 +76,7 @@ func TestRange(t *testing.T) {
 		// non-positive bigrat step
 		That("range &step=-1/2 10").
 			Throws(errs.BadValue{What: "step", Valid: "positive", Actual: "-1/2"}),
+		thatOutputErrorIsBubbled("range 1/2 3/2"),
 
 		That("range 1.2").Puts(0.0, 1.0),
 		That("range &step=0.5 1 3").Puts(1.0, 1.5, 2.0, 2.5),
@@ -90,12 +86,14 @@ func TestRange(t *testing.T) {
 		// non-positive float64 step
 		That("range &step=-0.5 10").
 			Throws(errs.BadValue{What: "step", Valid: "positive", Actual: "-0.5"}),
+		thatOutputErrorIsBubbled("range 1.2"),
 	)
 }
 
 func TestRepeat(t *testing.T) {
 	Test(t,
 		That(`repeat 4 foo`).Puts("foo", "foo", "foo", "foo"),
+		thatOutputErrorIsBubbled("repeat 1 foo"),
 	)
 }
 
@@ -118,6 +116,7 @@ func TestAll(t *testing.T) {
 		That(`put foo bar | all`).Puts("foo", "bar"),
 		That(`echo foobar | all`).Puts("foobar"),
 		That(`all [foo bar]`).Puts("foo", "bar"),
+		thatOutputErrorIsBubbled("all [foo]"),
 	)
 }
 
@@ -129,18 +128,21 @@ func TestOne(t *testing.T) {
 		That(`one [foo]`).Puts("foo"),
 		That(`one []`).Throws(AnyError),
 		That(`one [foo bar]`).Throws(AnyError),
+		thatOutputErrorIsBubbled("one [foo]"),
 	)
 }
 
 func TestTake(t *testing.T) {
 	Test(t,
 		That(`range 100 | take 2`).Puts(0, 1),
+		thatOutputErrorIsBubbled("take 1 [foo]"),
 	)
 }
 
 func TestDrop(t *testing.T) {
 	Test(t,
 		That(`range 100 | drop 98`).Puts(98, 99),
+		thatOutputErrorIsBubbled("drop 1 [foo bar]"),
 	)
 }
 
@@ -171,8 +173,7 @@ func TestCount(t *testing.T) {
 		That(`count [(range 100)]`).Puts(100),
 		That(`count 123`).Puts(3),
 		That(`count 1 2 3`).Throws(
-			errs.ArityMismatch{
-				What: "arguments here", ValidLow: 0, ValidHigh: 1, Actual: 3},
+			errs.ArityMismatch{What: "arguments", ValidLow: 0, ValidHigh: 1, Actual: 3},
 			"count 1 2 3"),
 		That(`count $true`).Throws(ErrorWithMessage("cannot get length of a bool")),
 	)
@@ -185,6 +186,7 @@ func TestKeys(t *testing.T) {
 		// Windows does not have an external sort command. Disabled until we have a
 		// builtin sort command.
 		That(`keys [&a=foo &b=bar] | order`).Puts("a", "b"),
+		thatOutputErrorIsBubbled("keys [&a=foo]"),
 	)
 }
 
@@ -194,12 +196,22 @@ func TestOrder(t *testing.T) {
 		That("put foo bar ipsum | order").Puts("bar", "foo", "ipsum"),
 		That("put foo bar bar | order").Puts("bar", "bar", "foo"),
 		That("put 10 1 5 2 | order").Puts("1", "10", "2", "5"),
+
 		// Ordering numbers
-		That("put 10 1 5 2 | each $float64~ | order").Puts(1.0, 2.0, 5.0, 10.0),
-		That("put 10 1 1 | each $float64~ | order").Puts(1.0, 1.0, 10.0),
-		That("put 10 NaN 1 | each $float64~ | order").Puts(math.NaN(), 1.0, 10.0),
-		That("put NaN NaN 1 | each $float64~ | order").
-			Puts(math.NaN(), math.NaN(), 1.0),
+		// Only small integers
+		That("put 10 1 1 | each $num~ | order").Puts(1, 1, 10),
+		That("put 10 1 5 2 -1 | each $num~ | order").Puts(-1, 1, 2, 5, 10),
+		// Small and large integers
+		That("put 1 "+z+" 2 "+z+" | each $num~ | order").Puts(1, 2, bigInt(z), bigInt(z)),
+		// Integers and rationals
+		That("put 1 2 3/2 3/2 | each $num~ | order").
+			Puts(1, big.NewRat(3, 2), big.NewRat(3, 2), 2),
+		// Integers and floats
+		That("put 1 1.5 2 1.5 | each $num~ | order").
+			Puts(1, 1.5, 1.5, 2),
+		// For the sake of ordering, NaN's are considered smaller than other numbers
+		That("put NaN -1 NaN | each $num~ | order").Puts(math.NaN(), math.NaN(), -1),
+
 		// Ordering lists
 		That("put [b] [a] | order").Puts(vals.MakeList("a"), vals.MakeList("b")),
 		That("put [a] [b] [a] | order").
@@ -213,16 +225,20 @@ func TestOrder(t *testing.T) {
 		That("put [a] [] [a (float64 2)] [a (float64 1)] | order").
 			Puts(vals.EmptyList, vals.MakeList("a"),
 				vals.MakeList("a", 1.0), vals.MakeList("a", 2.0)),
+
 		// Attempting to order uncomparable values
 		That("put a (float64 1) b (float64 2) | order").
 			Throws(ErrUncomparable, "order"),
 		That("put [a] [(float64 1)] | order").
 			Throws(ErrUncomparable, "order"),
+
 		// &reverse
 		That("put foo bar ipsum | order &reverse").Puts("ipsum", "foo", "bar"),
+
 		// &less-than
 		That("put 1 10 2 5 | order &less-than=[a b]{ < $a $b }").
 			Puts("1", "2", "5", "10"),
+
 		// &less-than writing more than one value
 		That("put 1 10 2 5 | order &less-than=[a b]{ put $true $false }").
 			Throws(
@@ -230,6 +246,7 @@ func TestOrder(t *testing.T) {
 					What:  "output of the &less-than callback",
 					Valid: "a single boolean", Actual: "2 values"},
 				"order &less-than=[a b]{ put $true $false }"),
+
 		// &less-than writing non-boolean value
 		That("put 1 10 2 5 | order &less-than=[a b]{ put x }").
 			Throws(
@@ -237,17 +254,22 @@ func TestOrder(t *testing.T) {
 					What:  "output of the &less-than callback",
 					Valid: "boolean", Actual: "string"},
 				"order &less-than=[a b]{ put x }"),
+
 		// &less-than throwing an exception
 		That("put 1 10 2 5 | order &less-than=[a b]{ fail bad }").
 			Throws(
 				FailError{"bad"},
 				"fail bad ", "order &less-than=[a b]{ fail bad }"),
+
 		// &less-than and &reverse
 		That("put 1 10 2 5 | order &reverse &less-than=[a b]{ < $a $b }").
 			Puts("10", "5", "2", "1"),
+
 		// Sort should be stable - test by pretending that all values but one
 		// are equal, an check that the order among them has not changed.
 		That("put l x o x r x e x m | order &less-than=[a b]{ eq $a x }").
 			Puts("x", "x", "x", "x", "l", "o", "r", "e", "m"),
+
+		thatOutputErrorIsBubbled("order [foo]"),
 	)
 }

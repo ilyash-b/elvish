@@ -11,7 +11,20 @@ import (
 	"src.elv.sh/pkg/testutil"
 )
 
-func TestCompileEffectUnix(t *testing.T) {
+func TestPipeline_ReaderGone_Unix(t *testing.T) {
+	Test(t,
+		// External commands terminated by SIGPIPE due to reader exiting early
+		// raise ReaderGone, which is then suppressed.
+		That("yes | true").DoesNothing(),
+		That(
+			"var reached = $false",
+			"{ yes; reached = $true } | true",
+			"put $reached",
+		).Puts(false),
+	)
+}
+
+func TestCommand_Unix(t *testing.T) {
 	_, cleanup := testutil.InTestDir()
 	defer cleanup()
 

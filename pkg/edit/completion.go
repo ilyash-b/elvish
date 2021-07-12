@@ -8,7 +8,6 @@ import (
 	"sync"
 	"unicode/utf8"
 
-	"github.com/xiaq/persistent/hash"
 	"src.elv.sh/pkg/cli"
 	"src.elv.sh/pkg/cli/mode"
 	"src.elv.sh/pkg/cli/tk"
@@ -17,6 +16,7 @@ import (
 	"src.elv.sh/pkg/eval/vals"
 	"src.elv.sh/pkg/fsutil"
 	"src.elv.sh/pkg/parse"
+	"src.elv.sh/pkg/persistent/hash"
 	"src.elv.sh/pkg/strutil"
 )
 
@@ -308,15 +308,20 @@ func wrapArgGenerator(gen complete.ArgGenerator) wrappedArgGenerator {
 		if err != nil {
 			return err
 		}
-		ch := fm.OutputChan()
+		out := fm.ValueOutput()
 		for _, rawItem := range rawItems {
+			var v interface{}
 			switch rawItem := rawItem.(type) {
 			case complete.ComplexItem:
-				ch <- complexItem(rawItem)
+				v = complexItem(rawItem)
 			case complete.PlainItem:
-				ch <- string(rawItem)
+				v = string(rawItem)
 			default:
-				ch <- rawItem
+				v = rawItem
+			}
+			err := out.Put(v)
+			if err != nil {
+				return err
 			}
 		}
 		return nil
@@ -356,23 +361,31 @@ type matcherOpts struct {
 
 func (*matcherOpts) SetDefaultOptions() {}
 
-type wrappedMatcher func(fm *eval.Frame, opts matcherOpts, seed string, inputs eval.Inputs)
+type wrappedMatcher func(fm *eval.Frame, opts matcherOpts, seed string, inputs eval.Inputs) error
 
 func wrapMatcher(m matcher) wrappedMatcher {
-	return func(fm *eval.Frame, opts matcherOpts, seed string, inputs eval.Inputs) {
-		out := fm.OutputChan()
+	return func(fm *eval.Frame, opts matcherOpts, seed string, inputs eval.Inputs) error {
+		out := fm.ValueOutput()
+		var errOut error
 		if opts.IgnoreCase || (opts.SmartCase && seed == strings.ToLower(seed)) {
 			if opts.IgnoreCase {
 				seed = strings.ToLower(seed)
 			}
 			inputs(func(v interface{}) {
-				out <- m(strings.ToLower(vals.ToString(v)), seed)
+				if errOut != nil {
+					return
+				}
+				errOut = out.Put(m(strings.ToLower(vals.ToString(v)), seed))
 			})
 		} else {
 			inputs(func(v interface{}) {
-				out <- m(vals.ToString(v), seed)
+				if errOut != nil {
+					return
+				}
+				errOut = out.Put(m(vals.ToString(v), seed))
 			})
 		}
+		return errOut
 	}
 }
 

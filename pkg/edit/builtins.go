@@ -142,15 +142,29 @@ func toKey(v interface{}) (ui.Key, error) {
 	}
 }
 
+//elvdoc:fn notify
+//
+// ```elvish
+// edit:notify $message
+// ```
+//
+// Prints a notification message.
+//
+// If called while the editor is active, this will print the message above the
+// editor, and redraw the editor.
+//
+// If called while the editor is inactive, this is equivalent to `echo $message`.
+
 //elvdoc:fn return-line
 //
 // Causes the Elvish REPL to end the current read iteration and evaluate the
-// code it just read.
+// code it just read. If called from a key binding, takes effect after the key
+// binding returns.
 
 //elvdoc:fn return-eof
 //
-// Causes the Elvish REPL to terminate. Internally, this works by raising a
-// special exception.
+// Causes the Elvish REPL to terminate. If called from a key binding, takes
+// effect after the key binding returns.
 
 //elvdoc:fn smart-enter
 //
@@ -189,11 +203,15 @@ func isSyntaxComplete(code string) bool {
 // ```
 // Breaks Elvish code into words.
 
-func wordify(fm *eval.Frame, code string) {
-	out := fm.OutputChan()
+func wordify(fm *eval.Frame, code string) error {
+	out := fm.ValueOutput()
 	for _, s := range parseutil.Wordify(code) {
-		out <- s
+		err := out.Put(s)
+		if err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 func initTTYBuiltins(app cli.App, tty cli.TTY, nb eval.NsBuilder) {
@@ -210,6 +228,7 @@ func initMiscBuiltins(app cli.App, nb eval.NsBuilder) {
 		"close-mode":     func() { closeMode(app) },
 		"end-of-history": func() { endOfHistory(app) },
 		"key":            toKey,
+		"notify":         app.Notify,
 		"redraw":         func(opts redrawOpts) { redraw(app, opts) },
 		"return-line":    app.CommitCode,
 		"return-eof":     app.CommitEOF,

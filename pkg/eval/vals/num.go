@@ -8,8 +8,35 @@ import (
 	"strings"
 )
 
+// Design notes:
+//
+// The choice and relationship of number types in Elvish is closely modelled
+// after R6RS's numerical tower (with the omission of complex types for now). In
+// fact, there is a 1:1 correspondence between number types in Elvish and a
+// typical R6RS implementation (the list below uses Chez Scheme's terminology;
+// see https://www.scheme.com/csug8/numeric.html):
+//
+// int      : fixnum
+// *big.Int : bignum
+// *big.Rat : ratnum
+// float64  : flonum
+//
+// Similar to Chez Scheme, *big.Int is only used for representing integers
+// outside the range of int, and *big.Rat is only used for representing
+// non-integer rationals. Furthermore, *big.Rat values are always in simplest
+// form (this is guaranteed by the math/big library). As a consequence, each
+// number in Elvish only has a single unique representation.
+//
+// Note that the only machine-native integer type included in the system is int.
+// This is done primarily for the uniqueness of representation for each number,
+// but also for simplicity - the vast majority of Go functions that take
+// machine-native integers take int. When there is a genuine need to work with
+// other machine-native integer types, you may have to manually convert from and
+// to *big.Int and check for the relevant range of integers.
+
 // Num is a stand-in type for int, *big.Int, *big.Rat or float64. This type
-// doesn't offer type safety, but is useful as a marker.
+// doesn't offer type safety, but is useful as a marker; for example, it is
+// respected when parsing function arguments.
 type Num interface{}
 
 // NumSlice is a stand-in type for []int, []*big.Int, []*big.Rat or []float64.
@@ -40,6 +67,8 @@ func ParseNum(s string) Num {
 // NumType represents a number type.
 type NumType uint8
 
+// PromoteToBigInt converts an int or *big.Int to a *big.Int. It panics if n is
+// any other type.
 // Possible values for NumType, sorted in the order of implicit conversion
 // (lower types can be implicitly converted to higher types).
 const (
@@ -60,6 +89,8 @@ func UnifyNums(nums []Num, typ NumType) NumSlice {
 	}
 	switch typ {
 	case Int:
+		// PromoteToBigInt converts an int or *big.Int, a *big.I or *big.Ratnt. It
+		// paniRat if n is any other type.
 		unified := make([]int, len(nums))
 		for i, num := range nums {
 			unified[i] = num.(int)
@@ -68,54 +99,19 @@ func UnifyNums(nums []Num, typ NumType) NumSlice {
 	case BigInt:
 		unified := make([]*big.Int, len(nums))
 		for i, num := range nums {
-			switch num := num.(type) {
-			case int:
-				unified[i] = big.NewInt(int64(num))
-			case *big.Int:
-				unified[i] = num
-			default:
-				panic("unreachable")
-			}
+			unified[i] = PromoteToBigInt(num)
 		}
 		return unified
 	case BigRat:
 		unified := make([]*big.Rat, len(nums))
 		for i, num := range nums {
-			switch num := num.(type) {
-			case int:
-				unified[i] = big.NewRat(int64(num), 1)
-			case *big.Int:
-				var r big.Rat
-				r.SetInt(num)
-				unified[i] = &r
-			case *big.Rat:
-				unified[i] = num
-			default:
-				panic("unreachable")
-			}
+			unified[i] = PromoteToBigRat(num)
 		}
 		return unified
 	case Float64:
 		unified := make([]float64, len(nums))
 		for i, num := range nums {
-			switch num := num.(type) {
-			case int:
-				unified[i] = float64(num)
-			case *big.Int:
-				if num.IsInt64() {
-					// Might fit in float64
-					unified[i] = float64(num.Int64())
-				} else {
-					// Definitely won't fit in float64
-					unified[i] = math.Inf(num.Sign())
-				}
-			case *big.Rat:
-				unified[i], _ = num.Float64()
-			case float64:
-				unified[i] = num
-			default:
-				panic("unreachable")
-			}
+			unified[i] = ConvertToFloat64(num)
 		}
 		return unified
 	default:
@@ -123,6 +119,32 @@ func UnifyNums(nums []Num, typ NumType) NumSlice {
 	}
 }
 
+// UnifyNums2 is like UnifyNums, but is optimized for two numbers.
+func UnifyNums2(n1, n2 Num, typ NumType) (u1, u2 Num) {
+	t1 := getNumType(n1)
+	if typ < t1 {
+		typ = t1
+	}
+	t2 := getNumType(n2)
+	if typ < t2 {
+		typ = t2
+	}
+	switch typ {
+	case Int:
+		return n1, n2
+	case BigInt:
+		return PromoteToBigInt(n1), PromoteToBigInt(n2)
+	case BigRat:
+		return PromoteToBigRat(n1), PromoteToBigRat(n2)
+	case Float64:
+		return ConvertToFloat64(n1), ConvertToFloat64(n2)
+	default:
+		panic("unreachable")
+	}
+}
+
+// getNumType returns the type of the interface if the value is a number; otherwise, it panics since
+// that is a "can't happen" case.
 func getNumType(n Num) NumType {
 	switch n.(type) {
 	case int:
@@ -135,6 +157,63 @@ func getNumType(n Num) NumType {
 		return Float64
 	default:
 		panic("invalid num type " + fmt.Sprintf("%T", n))
+	}
+}
+
+// PromoteToBigInt converts an int or *big.Int to a *big.Int. It panics if n is
+// any other type.
+func PromoteToBigInt(n Num) *big.Int {
+	switch n := n.(type) {
+	case int:
+		return big.NewInt(int64(n))
+	case *big.Int:
+		return n
+	default:
+		panic("invalid num type " + fmt.Sprintf("%T", n))
+	}
+}
+
+// PromoteToBigRat converts an int, *big.Int or *big.Rat to a *big.Rat. It
+// panics if n is any other type.
+func PromoteToBigRat(n Num) *big.Rat {
+	switch n := n.(type) {
+	case int:
+		return big.NewRat(int64(n), 1)
+	case *big.Int:
+		var r big.Rat
+		r.SetInt(n)
+		return &r
+	case *big.Rat:
+		return n
+	default:
+		panic("invalid num type " + fmt.Sprintf("%T", n))
+	}
+}
+
+// ConvertToFloat64 converts any number to float64. It panics if num is not a
+// number value.
+func ConvertToFloat64(num Num) float64 {
+	switch num := num.(type) {
+	case int:
+		return float64(num)
+	case *big.Int:
+		if num.IsInt64() {
+			// Number can be converted losslessly to int64, so do that and then
+			// rely on the builtin conversion. Numbers too large to fit in
+			// float64 will be handled appropriately by the builtin conversion,
+			// overflowing to +Inf or -Inf.
+			return float64(num.Int64())
+		}
+		// Number doesn't fit in int64, so definitely won't fit in float64;
+		// handle this by overflowing.
+		return math.Inf(num.Sign())
+	case *big.Rat:
+		f, _ := num.Float64()
+		return f
+	case float64:
+		return num
+	default:
+		panic("invalid num type " + fmt.Sprintf("%T", num))
 	}
 }
 

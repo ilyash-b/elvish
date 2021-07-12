@@ -378,19 +378,26 @@ lorem
 haha
 ```
 
+You can test if a key is present using [`has-key`](./builtin.html#has-key) and
+enumerate the keys using the [`keys`](./builtin.html#keys) builtins.
+
 ## Pseudo-map
 
-The concept of **pseudo-map** is not a concrete data type, but refer to certain
-data types that behave like maps in some aspects.
+A pseudo-map is not a single concrete data type. It refers to concrete types
+that behave like maps with some restrictions.
 
-A pseudo-map typically has a fixed set of keys, called **fields**. The values of
-a field can be accessed by [indexing](#indexing). However, unlike maps, it is
-usually not possible to add new keys, remove existing keys, or even assigning a
-new value to an existing key.
+A pseudo-map has a fixed set of keys whose values can be accessed by
+[indexing](#indexing) like you would for a regular [map](#map). Similarly, you
+can use commands like [`keys`](./builtin.html#keys) and
+[`has-key`](./builtin.html#keys) on such objects.
+
+Unlike a normal map, it is currently not possible to create a modified version
+of an existing pseudo-map: it is not possible to create a pseudo-map with new
+keys, without existing keys, or with a different value for a given key.
 
 The pseudo-map mechanism is often used for introspection. For example,
-[exceptions](#exception) and [user-defined functions](#function) are both
-structmaps.
+[exceptions](#exception), [user-defined functions](#function), and
+[`$buildinfo`](./builtin.html#buildinfo) are pseudo-maps.
 
 ## Nil
 
@@ -475,6 +482,15 @@ Examples:
 ~> put ?(false)[reason]
 ▶ [&cmd-name=false &exit-status=1 &pid=953421 &type=external-cmd/exited]
 ```
+
+## File
+
+There is no literal syntax for the file type. This type is returned by commands
+such as [file:open](file.html#open) and [path:temp-file](path.html#temp-file).
+It can be used as the target of a redirection rather than a filename.
+
+A file object is a [pseudo-map](#pseudo-map) with fields `fd` (an int) and
+`name` (a string). If the file is closed the fd will be -1.
 
 ## Function
 
@@ -635,7 +651,8 @@ when used as the suffix of a variable name:
 
 -   If a variable name ends with `~`, it can only take callable values, which
     are functions and external commands. Such variables are consulted when
-    resolving [ordinary commands](#ordinary-command).
+    resolving [ordinary commands](#ordinary-command). The default value is the
+    builtin [`nop`](builtin.html#nop) command.
 
 -   If a variable name ends with `:`, it can only take namespaces as values.
     They are used for accessing namespaced variables.
@@ -1292,7 +1309,8 @@ To force a particular order of evaluation, group expressions using a
 A **command form** is either an [ordinary command](#ordinary-command), a
 [special command](#special-command) or an
 [legacy assignment form](#legacy-assignment-form). All of three different types
-can have [redirections](#redirection).
+have access to [IO ports](#io-ports), which can be modifed via
+[redirections](#redirection).
 
 When Elvish parses a command form, it applies the following process to decide
 its type:
@@ -1481,39 +1499,80 @@ for ordinary assignments, when they are not followed by a command form; for
 example, `a=x` behaves like an ordinary assignment `a = x`. This will likely go
 away; don't rely on it.
 
+## IO ports
+
+A command have access to a number of **IO ports**. Each IO port is identified by
+a number starting from 0, and combines a traditional file object, which conveys
+bytes, and a **value channel**, which conveys values.
+
+Elvish starts with 3 IO ports at the top level with special significance for
+commands:
+
+-   Port 0, known as standard input or stdin, and is used as the default input
+    port by builtin commands.
+
+-   Port 1, known as standard output or stdout, and is used as the default
+    output port by builtin commands.
+
+-   Port 2, known as standard error or stderr, is currently not special for
+    builtin commands, but usually has special significance for external
+    commands.
+
+Value channels are typically created by a [pipeline](#pipeline), and used to
+pass values between commands in the same pipeline. At the top level, they are
+initialized with special values:
+
+-   The value channel for port 0 never produces any values when read.
+
+-   The value channels for port 1 and 2 are special channels that forward the
+    values written to them to their file counterparts. Each value is put on a
+    separate line, with a prefix controlled by
+    [`$value-out-indicator`](builtin.html#value-out-indicator). The default
+    prefix is `▶` followed by a space.
+
+When running an external command, the file object from each port is used to
+create its file descriptor table. Value channels only work inside the Elvish
+process, and are not accessible to external commands.
+
+IO ports can be modified with [redirections](#redirection) or by
+[pipelines](#pipeline).
+
 ## Redirection
 
 <!-- TODO: Describe the syntax and behavior more formally. -->
 
-You can add **redirections** to any command form, to modify the file descriptors
-these command form operate with.
+A **redirection** modifies the IO ports a command operate with. There are
+several variants.
 
-The most common form of redirections opens a file and associates it with an FD.
-The form consists of an optional destination FD (like `2`), a redirection
+A **file redirection** opens a file and associates it with an IO port. The
+syntax consists of an optional destination IO port (like `2`), a redirection
 operator (like `>`) and a filename (like `error.log`):
 
--   The **destination fd** determines which FD to modify. It can be given either
-    as a number, or one of `stdin`, `stdout` and `stderr`. There must be no
-    space between the FD and the redirection operator; otherwise Elvish will
-    parse it as an argument.
+-   The **destination IO port** determines which IO port to modify. It can be
+    given either as the number of the IO port, or one of `stdin`, `stdout` and
+    `stderr`, which are equivalent to 0, 1 and 2 respectively.
 
-    The destination FD can be omitted, in which case it is inferred from the
-    redirection operator.
+    The destination IO port can be omitted, in which case it is inferred from
+    the redirection operator.
+
+    When the destination IO port is given, it must precede the redirection
+    operator directly, without whitespaces in between; if there are whitespaces,
+    otherwise Elvish will parse it as an argument instead.
 
 -   The **redirection operator** determines the mode to open the file, and the
-    destination FD if it is not explicitly specified.
+    destination IO port if it is not explicitly specified.
 
 -   The **filename** names the file to open.
 
 Possible redirection operators and their default FDs are:
 
--   `<` for reading. The default FD is 0 (stdin).
+-   `<` for reading. The default IO port is 0 (stdin).
 
--   `>` for writing. The default FD is 1 (stdout).
+-   `>` for writing. The default IO port is 1 (stdout).
 
--   `>>` for appending. The default FD is 1 (stdout).
+-   `>>` for appending. The default IO port is 1 (stdout).
 
--   `<>` for reading and writing. The default FD is 1 (stdout).
+-   `<>` for reading and writing. The default IO port is 1 (stdout).
 
 Examples:
 
@@ -1533,19 +1592,40 @@ Traceback:
 Try '/bin/ls --help' for more information.
 ```
 
-Redirections can also be used for closing or duplicating FDs. Instead of writing
-a filename, use `&fd` (where `fd` is a number, or any of `stdin`, `stdout` and
-`stderr`) for duplicating, or `&-` for closing. In this case, the redirection
-operator only determines the default destination FD (and is totally irrevelant
-if a destination FD is specified). Examples:
+IO ports modified by file redirections do not support value channels. To be more
+exact:
+
+-   A file redirection using `<` sets the value channel to one that never
+    produces any values.
+
+-   A file redirection using `>`, `>>` or `<>` sets the value channel to one
+    that throws an exception when written to.
+
+Examples:
 
 ```elvish-transcript
-~> ls >&- # close stdout
-/bin/ls: write error: Bad file descriptor
-Exception: ls exited with 2
-Traceback:
-  [interactive], line 1:
-    ls >&-
+~> put foo > file # will truncate file if it exists
+Exception: port has no value output
+[tty 2], line 1: put foo > file
+~> echo content > file
+~> only-values < file
+~> # previous command produced nothing
+```
+
+Redirections can also be used for closing or duplicating IO ports. Instead of
+writing a filename, use `&fd` (where `fd` is a number, or any of `stdin`,
+`stdout` and `stderr`) for duplicating, or `&-` for closing. In this case, the
+redirection operator only determines the default destination FD (and is totally
+irrevelant if a destination IO port is specified). Examples:
+
+```elvish-transcript
+~> date >&-
+date: stdout: Bad file descriptor
+Exception: date exited with 1
+[tty 3], line 1: date >&-
+~> put foo >&-
+Exception: port has no value output
+[tty 37], line 1: put foo >&-
 ```
 
 If you have multiple related redirections, they are applied in the order they
@@ -1559,20 +1639,9 @@ out
 err
 ```
 
-Redirections may appear anywhere in the command, except at the beginning,
-although this may be restricted in future. It's usually good style to write
-redirections at the end of command forms.
-
-**Note:** Elvish only supports reading and writing bytes from/to the target of a
-redirection. Attemping to read values from a file or a a
-[pipe](builtin.html#pipe) via redirection will produce no values, and all values
-written to a file or a pipe will be discarded. Examples:
-
--   Running `put foo > data` will not write anything to the file `data`, other
-    than truncating it.
-
--   Assuming the file `data` contains a single line `hello`,
-    `only-values < data` will not do anything.
+Redirections may appear anywhere in the command, except at the beginning, (this
+may be restricted in future). It's usually good style to write redirections at
+the end of command forms.
 
 # Special commands
 
@@ -2007,18 +2076,28 @@ recursive functions:
 ```
 
 Under the hood, `fn` defines a variable with the given name plus `~` (see
-[variable suffix](#variable-suffix)).
+[variable suffix](#variable-suffix)). Example:
+
+```elvish-transcript
+~> fn f { echo hello from f }
+~> var v = $f~
+~> $v
+hello from f
+```
 
 # Pipeline
 
 A **pipeline** is formed by joining one or more commands together with the pipe
 sign (`|`).
 
-## IO semantics
-
-For each pair of adjacent commands `a | b`, the output of `a` is connected to
-the input of `b`. Both the byte pipe and the value channel are connected, even
+For each pair of adjacent commands `a | b`, the standard output of the left-hand
+command `a` (IO port 1) is connected to the standard input (IO port 0) of the
+right-hand command `b`. Both the file and the value channel are connected, even
 if one of them is not used.
+
+Elvish may have internal buffering for both the file and the value channel, so
+`a` may be able to write bytes or values even if `b` is not reading them. The
+exact buffer size is not specified.
 
 Command redirections are applied before the connection happens. For instance,
 the following writes `foo` to `a.txt` instead of the output:
@@ -2029,10 +2108,10 @@ the following writes `foo` to `a.txt` instead of the output:
 foo
 ```
 
-## Execution flow
+A pipeline runs all of its command in parallel, and terminates when all of the
+commands have terminated.
 
-All of the commands in a pipeline are executed in parallel, and the execution of
-the pipeline finishes when all of its commands finish execution.
+## Pipeline exception
 
 If one or more command in a pipeline throws an exception, the other commands
 will continue to execute as normal. After all commands finish execution, an
@@ -2043,6 +2122,59 @@ have thrown an exception:
 
 -   If more than one commands have thrown exceptions, a "composite exception",
     containing information all exceptions involved, is thrown.
+
+If a command threw an exception because it tried to write output when the next
+command has terminated, that exception is suppressed when it is propagated to
+the pipeline.
+
+For example, the `put` command throws an exception when trying to write to a
+closed pipe, so the following loop will terminate with an exception:
+
+```elvish-transcript
+~> while $true { put foo } > &-
+Exception: port has no value output
+[tty 9], line 1: while $true { put foo } > &-
+```
+
+However, if it appears in a pipeline before `nop`, the entire pipeline will not
+throw an exception:
+
+```elvish-transcript
+~> while $true { put foo } | nop
+~> # no exception thrown from previous line
+```
+
+Internally, the `put foo` command still threw an exception, but since that
+exception was trying to write to output when `nop` already terminated, that
+exception was suppressed by the pipeline.
+
+This can be more clearly observed with the following code:
+
+```elvish-transcript
+~> var r = $false
+~> { while $true { put foo }; set r = $true } | nop
+~> put $r
+▶ $false
+```
+
+The same mechanism works for builtin commands that write to the byte output:
+
+```elvish-transcript
+~> var r = $false
+~> { while $true { echo foo }; set r = $true } | nop
+~> put $r
+▶ $false
+```
+
+On UNIX, if an external command was terminated by SIGPIPE, and Elvish detected
+that it terminated after the next command in the pipeline, such exceptions will
+also be suppressed by the pipeline. For example, the following pipeline does not
+throw an exception, despite the `yes` command being killed by SIGPIPE:
+
+```elvish-transcript
+~> yes | head -n1
+y
+```
 
 ## Background pipeline
 
@@ -2073,9 +2205,9 @@ If an external command exits with a non-zero status, Elvish treats that as an
 exception.
 
 Flow commands -- `break`, `continue` and `return` -- are ordinary builtin
-commands that raise special "flow control" exceptions. The `for` and `while`
-commands capture `break` and `continue`, while `fn` modifies its closure to
-capture `return`.
+commands that raise special "flow control" exceptions. The `for`, `while`, and
+`peach` commands capture `break` and `continue`, while `fn` modifies its closure
+to capture `return`.
 
 One interesting implication is that since flow commands are just ordinary
 commands you can build functions on top of them. For instance, this function
@@ -2234,6 +2366,9 @@ f from x/y/z
 
 In general, a module defined in namespace will be the same as the file name
 (without the `.elv` extension).
+
+There is experimental support for importing modules written in Go. See the
+[project repository](https://github.com/elves/elvish) for details.
 
 ### Circular dependencies
 

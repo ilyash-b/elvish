@@ -4,7 +4,9 @@ import (
 	"errors"
 
 	"src.elv.sh/pkg/fsutil"
-	"src.elv.sh/pkg/store"
+	"src.elv.sh/pkg/store/storedefs"
+
+	"src.elv.sh/pkg/eval/errs"
 )
 
 // Filesystem commands.
@@ -65,7 +67,7 @@ func cd(fm *Frame, args ...string) error {
 	case 1:
 		dir = args[0]
 	default:
-		return ErrArgs
+		return errs.ArityMismatch{What: "arguments", ValidLow: 0, ValidHigh: 1, Actual: len(args)}
 	}
 
 	return fm.Evaler.Chdir(dir)
@@ -77,8 +79,8 @@ func cd(fm *Frame, args ...string) error {
 // dir-history
 // ```
 //
-// Return a list containing the directory history. Each element is a map with two
-// keys: `path` and `score`. The list is sorted by descending score.
+// Return a list containing the interactive directory history. Each element is a map with two keys:
+// `path` and `score`. The list is sorted by descending score.
 //
 // Example:
 //
@@ -86,6 +88,8 @@ func cd(fm *Frame, args ...string) error {
 // ~> dir-history | take 1
 // ▶ [&path=/Users/foo/.elvish &score=96.79928]
 // ```
+//
+// @cf edit:command-history
 
 type dirHistoryEntry struct {
 	Path  string
@@ -99,13 +103,16 @@ func dirs(fm *Frame) error {
 	if daemon == nil {
 		return ErrStoreNotConnected
 	}
-	dirs, err := daemon.Dirs(store.NoBlacklist)
+	dirs, err := daemon.Dirs(storedefs.NoBlacklist)
 	if err != nil {
 		return err
 	}
-	out := fm.OutputChan()
+	out := fm.ValueOutput()
 	for _, dir := range dirs {
-		out <- dirHistoryEntry{dir.Path, dir.Score}
+		err := out.Put(dirHistoryEntry{dir.Path, dir.Score})
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }

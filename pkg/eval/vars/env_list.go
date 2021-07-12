@@ -1,14 +1,17 @@
 package vars
 
+// Note: This doesn't have an associated env_list_tests.go because most of its functionality is
+// tested by TestSetEnv_PATH and related tests.
+
 import (
 	"errors"
 	"os"
 	"strings"
 	"sync"
 
-	"github.com/xiaq/persistent/vector"
 	"src.elv.sh/pkg/diag"
 	"src.elv.sh/pkg/eval/vals"
+	"src.elv.sh/pkg/persistent/vector"
 )
 
 var (
@@ -18,8 +21,8 @@ var (
 
 // Errors
 var (
-	ErrPathMustBeString           = errors.New("path must be string")
-	ErrPathCannotContainColonZero = errors.New(`path cannot contain colon or \0`)
+	ErrPathMustBeString          = errors.New("path must be string")
+	ErrPathContainsForbiddenChar = errors.New("path cannot contain NUL byte, colon on UNIX or semicolon on Windows")
 )
 
 // NewEnvListVar returns a variable whose value is a list synchronized with an
@@ -71,7 +74,7 @@ func (envli *envListVar) Set(v interface{}) error {
 		}
 		path := s
 		if strings.ContainsAny(path, forbiddenInPath) {
-			errElement = ErrPathCannotContainColonZero
+			errElement = ErrPathContainsForbiddenChar
 			return false
 		}
 		paths = append(paths, s)

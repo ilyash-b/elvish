@@ -345,7 +345,7 @@ func use(fm *Frame, spec string, r diag.Ranger) (*Ns, error) {
 				return nil, err
 			}
 		}
-		path := filepath.Clean(dir + "/" + spec + ".elv")
+		path := filepath.Clean(dir + "/" + spec)
 		return useFromFile(fm, spec, path, r)
 	}
 	if ns, ok := fm.Evaler.modules[spec]; ok {
@@ -359,7 +359,7 @@ func use(fm *Frame, spec string, r diag.Ranger) (*Ns, error) {
 	if libDir == "" {
 		return nil, noSuchModule{spec}
 	}
-	return useFromFile(fm, spec, libDir+"/"+spec+".elv", r)
+	return useFromFile(fm, spec, libDir+"/"+spec, r)
 }
 
 // TODO: Make access to fm.Evaler.modules concurrency-safe.
@@ -367,14 +367,32 @@ func useFromFile(fm *Frame, spec, path string, r diag.Ranger) (*Ns, error) {
 	if ns, ok := fm.Evaler.modules[path]; ok {
 		return ns, nil
 	}
-	code, err := readFileUTF8(path)
+	_, err := os.Stat(path + ".so")
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, noSuchModule{spec}
+		code, err := readFileUTF8(path + ".elv")
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil, noSuchModule{spec}
+			}
+			return nil, err
 		}
+		return evalModule(fm, path, parse.Source{Name: path, Code: code, IsFile: true}, r)
+	}
+
+	plug, err := pluginOpen(path + ".so")
+	if err != nil {
+		return nil, noSuchModule{spec}
+	}
+	sym, err := plug.Lookup("Ns")
+	if err != nil {
 		return nil, err
 	}
-	return evalModule(fm, path, parse.Source{Name: path, Code: code, IsFile: true}, r)
+	ns, ok := sym.(**Ns)
+	if !ok {
+		return nil, noSuchModule{spec}
+	}
+	fm.Evaler.modules[path] = *ns
+	return *ns, nil
 }
 
 // TODO: Make access to fm.Evaler.modules concurrency-safe.
@@ -402,7 +420,7 @@ func evalModule(fm *Frame, key string, src parse.Source, r diag.Ranger) (*Ns, er
 // false-ish values, the last value is output. If there are no arguments, it
 // outputs $true, as if there is a hidden $true before actual arguments.
 func compileAnd(cp *compiler, fn *parse.Form) effectOp {
-	return &andOrOp{cp.compoundOps(fn.Args), true, false}
+	return &andOrOp{fn.Range(), cp.compoundOps(fn.Args), true, false}
 }
 
 // compileOr compiles the "or" special form.
@@ -412,10 +430,11 @@ func compileAnd(cp *compiler, fn *parse.Form) effectOp {
 // true-ish values, the last value is output. If there are no arguments, it
 // outputs $false, as if there is a hidden $false before actual arguments.
 func compileOr(cp *compiler, fn *parse.Form) effectOp {
-	return &andOrOp{cp.compoundOps(fn.Args), false, true}
+	return &andOrOp{fn.Range(), cp.compoundOps(fn.Args), false, true}
 }
 
 type andOrOp struct {
+	diag.Ranging
 	argOps []valuesOp
 	init   bool
 	stopAt bool
@@ -423,6 +442,7 @@ type andOrOp struct {
 
 func (op *andOrOp) exec(fm *Frame) Exception {
 	var lastValue interface{} = vals.Bool(op.init)
+	out := fm.ValueOutput()
 	for _, argOp := range op.argOps {
 		values, exc := argOp.exec(fm)
 		if exc != nil {
@@ -430,14 +450,12 @@ func (op *andOrOp) exec(fm *Frame) Exception {
 		}
 		for _, value := range values {
 			if vals.Bool(value) == op.stopAt {
-				fm.OutputChan() <- value
-				return nil
+				return fm.errorp(op, out.Put(value))
 			}
 			lastValue = value
 		}
 	}
-	fm.OutputChan() <- lastValue
-	return nil
+	return fm.errorp(op, out.Put(lastValue))
 }
 
 func compileIf(cp *compiler, fn *parse.Form) effectOp {
@@ -580,7 +598,7 @@ type forOp struct {
 func (op *forOp) exec(fm *Frame) Exception {
 	variable, err := derefLValue(fm, op.lvalue)
 	if err != nil {
-		return fm.errorp(op, err)
+		return fm.errorp(op.lvalue, err)
 	}
 	iterable, err := evalForValue(fm, op.iterOp, "value being iterated")
 	if err != nil {

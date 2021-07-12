@@ -38,7 +38,7 @@ func Serve(sockpath, dbpath string) {
 		case sig := <-quitSignals:
 			logger.Printf("received signal %s", sig)
 		case <-quitChan:
-			logger.Printf("No active client, daemon exit")
+			logger.Printf("all clients exited")
 		}
 		err := os.Remove(sockpath)
 		if err != nil {
@@ -52,7 +52,6 @@ func Serve(sockpath, dbpath string) {
 		if err != nil {
 			logger.Printf("failed to close listener: %v", err)
 		}
-		logger.Println("listener closed, waiting to exit")
 	}()
 
 	svc := &service{st, err}
@@ -72,7 +71,12 @@ func Serve(sockpath, dbpath string) {
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			logger.Printf("Failed to accept: %#v", err)
+			select {
+			case <-quitChan:
+				// listener was closed explicitly; don't complain.
+			default:
+				logger.Printf("Failed to accept: %v", err)
+			}
 			break
 		}
 

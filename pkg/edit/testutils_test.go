@@ -12,6 +12,7 @@ import (
 	"src.elv.sh/pkg/eval/vars"
 	"src.elv.sh/pkg/parse"
 	"src.elv.sh/pkg/store"
+	"src.elv.sh/pkg/store/storedefs"
 	"src.elv.sh/pkg/testutil"
 )
 
@@ -21,7 +22,7 @@ type fixture struct {
 	Editor  *Editor
 	TTYCtrl clitest.TTYCtrl
 	Evaler  *eval.Evaler
-	Store   store.Store
+	Store   storedefs.Store
 	Home    string
 
 	width   int
@@ -42,7 +43,7 @@ func assign(name string, val interface{}) func(*fixture) {
 	}
 }
 
-func storeOp(storeFn func(store.Store)) func(*fixture) {
+func storeOp(storeFn func(storedefs.Store)) func(*fixture) {
 	return func(f *fixture) {
 		storeFn(f.Store)
 		// TODO(xiaq): Don't depend on this Elvish API.
@@ -53,12 +54,13 @@ func storeOp(storeFn func(store.Store)) func(*fixture) {
 func setup(fns ...func(*fixture)) *fixture {
 	st, cleanupStore := store.MustGetTempStore()
 	home, cleanupFs := testutil.InTempHome()
+	restorePATH := testutil.WithTempEnv("PATH", "")
+
 	tty, ttyCtrl := clitest.NewFakeTTY()
 	ev := eval.NewEvaler()
 	ed := NewEditor(tty, ev, st)
-	ev.AddModule("edit", ed.Ns())
+	ev.AddBuiltin(eval.NsBuilder{}.AddNs("edit", ed.Ns()).Ns())
 	evals(ev,
-		`use edit`,
 		// This is the same as the default prompt for non-root users. This makes
 		// sure that the tests will work when run as root.
 		"edit:prompt = { tilde-abbr $pwd; put '> ' }",
@@ -73,6 +75,7 @@ func setup(fns ...func(*fixture)) *fixture {
 	f.cleanup = func() {
 		f.Editor.app.CommitEOF()
 		f.Wait()
+		restorePATH()
 		cleanupFs()
 		cleanupStore()
 	}
@@ -140,4 +143,11 @@ func testGlobal(t *testing.T, ev *eval.Evaler, name string, wantVal interface{})
 		t.Errorf("$%s = %s, want %s",
 			name, vals.Repr(val, vals.NoPretty), vals.Repr(wantVal, vals.NoPretty))
 	}
+}
+
+func testThatOutputErrorIsBubbled(t *testing.T, f *fixture, code string) {
+	t.Helper()
+	evals(f.Evaler, "var ret = (bool ?("+code+" >&-))")
+	// Exceptions are booleanly false
+	testGlobal(t, f.Evaler, "ret", false)
 }

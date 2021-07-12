@@ -8,10 +8,10 @@ import (
 	"sort"
 	"strconv"
 
-	"github.com/xiaq/persistent/hashmap"
 	"src.elv.sh/pkg/eval/errs"
 	"src.elv.sh/pkg/eval/vals"
 	"src.elv.sh/pkg/eval/vars"
+	"src.elv.sh/pkg/persistent/hashmap"
 )
 
 // Sequence, list and maps.
@@ -195,7 +195,7 @@ func rangeFn(fm *Frame, opts rangeOpts, args ...vals.Num) error {
 	case 2:
 		rawNums = []vals.Num{args[0], args[1], opts.Step}
 	default:
-		return ErrArgs
+		return errs.ArityMismatch{What: "arguments", ValidLow: 1, ValidHigh: 2, Actual: len(args)}
 	}
 	switch step := opts.Step.(type) {
 	case int:
@@ -221,12 +221,15 @@ func rangeFn(fm *Frame, opts rangeOpts, args ...vals.Num) error {
 	}
 	nums := vals.UnifyNums(rawNums, vals.Int)
 
-	out := fm.OutputChan()
+	out := fm.ValueOutput()
 	switch nums := nums.(type) {
 	case []int:
 		lower, upper, step := nums[0], nums[1], nums[2]
 		for cur := lower; cur < upper; cur += step {
-			out <- vals.FromGo(cur)
+			err := out.Put(vals.FromGo(cur))
+			if err != nil {
+				return err
+			}
 			if cur+step <= cur {
 				// Overflow
 				break
@@ -236,7 +239,10 @@ func rangeFn(fm *Frame, opts rangeOpts, args ...vals.Num) error {
 		lower, upper, step := nums[0], nums[1], nums[2]
 		cur := &big.Int{}
 		for cur.Set(lower); cur.Cmp(upper) < 0; {
-			out <- vals.FromGo(cur)
+			err := out.Put(vals.FromGo(cur))
+			if err != nil {
+				return err
+			}
 			next := &big.Int{}
 			next.Add(cur, step)
 			cur = next
@@ -245,7 +251,10 @@ func rangeFn(fm *Frame, opts rangeOpts, args ...vals.Num) error {
 		lower, upper, step := nums[0], nums[1], nums[2]
 		cur := &big.Rat{}
 		for cur.Set(lower); cur.Cmp(upper) < 0; {
-			out <- vals.FromGo(cur)
+			err := out.Put(vals.FromGo(cur))
+			if err != nil {
+				return err
+			}
 			next := &big.Rat{}
 			next.Add(cur, step)
 			cur = next
@@ -253,7 +262,10 @@ func rangeFn(fm *Frame, opts rangeOpts, args ...vals.Num) error {
 	case []float64:
 		lower, upper, step := nums[0], nums[1], nums[2]
 		for cur := lower; cur < upper; cur += step {
-			out <- vals.FromGo(cur)
+			err := out.Put(vals.FromGo(cur))
+			if err != nil {
+				return err
+			}
 			if cur+step <= cur {
 				// Overflow
 				break
@@ -285,11 +297,15 @@ func rangeFn(fm *Frame, opts rangeOpts, args ...vals.Num) error {
 //
 // Etymology: [Clojure](https://clojuredocs.org/clojure.core/repeat).
 
-func repeat(fm *Frame, n int, v interface{}) {
-	out := fm.OutputChan()
+func repeat(fm *Frame, n int, v interface{}) error {
+	out := fm.ValueOutput()
 	for i := 0; i < n; i++ {
-		out <- v
+		err := out.Put(v)
+		if err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 //elvdoc:fn assoc
@@ -392,9 +408,16 @@ func dissoc(a, k interface{}) (interface{}, error) {
 //
 // @cf one
 
-func all(fm *Frame, inputs Inputs) {
-	out := fm.OutputChan()
-	inputs(func(v interface{}) { out <- v })
+func all(fm *Frame, inputs Inputs) error {
+	out := fm.ValueOutput()
+	var errOut error
+	inputs(func(v interface{}) {
+		if errOut != nil {
+			return
+		}
+		errOut = out.Put(v)
+	})
+	return errOut
 }
 
 //elvdoc:fn one
@@ -421,8 +444,7 @@ func one(fm *Frame, inputs Inputs) error {
 		n++
 	})
 	if n == 1 {
-		fm.OutputChan() <- val
-		return nil
+		return fm.ValueOutput().Put(val)
 	}
 	return fmt.Errorf("expect a single value, got %d", n)
 }
@@ -451,15 +473,20 @@ func one(fm *Frame, inputs Inputs) error {
 //
 // Etymology: Haskell.
 
-func take(fm *Frame, n int, inputs Inputs) {
-	out := fm.OutputChan()
+func take(fm *Frame, n int, inputs Inputs) error {
+	out := fm.ValueOutput()
+	var errOut error
 	i := 0
 	inputs(func(v interface{}) {
+		if errOut != nil {
+			return
+		}
 		if i < n {
-			out <- v
+			errOut = out.Put(v)
 		}
 		i++
 	})
+	return errOut
 }
 
 //elvdoc:fn drop
@@ -489,15 +516,20 @@ func take(fm *Frame, n int, inputs Inputs) {
 //
 // @cf take
 
-func drop(fm *Frame, n int, inputs Inputs) {
-	out := fm.OutputChan()
+func drop(fm *Frame, n int, inputs Inputs) error {
+	out := fm.ValueOutput()
+	var errOut error
 	i := 0
 	inputs(func(v interface{}) {
+		if errOut != nil {
+			return
+		}
 		if i >= n {
-			out <- v
+			errOut = out.Put(v)
 		}
 		i++
 	})
+	return errOut
 }
 
 //elvdoc:fn has-value
@@ -656,8 +688,7 @@ func count(fm *Frame, args ...interface{}) (int, error) {
 	default:
 		// The error matches what would be returned if the `Inputs` API was
 		// used. See GoFn.Call().
-		return 0, errs.ArityMismatch{
-			What: "arguments here", ValidLow: 0, ValidHigh: 1, Actual: nargs}
+		return 0, errs.ArityMismatch{What: "arguments", ValidLow: 0, ValidHigh: 1, Actual: nargs}
 	}
 	return n, nil
 }
@@ -682,11 +713,16 @@ func count(fm *Frame, args ...interface{}) (int, error) {
 // Note that there is no guaranteed order for the keys of a map.
 
 func keys(fm *Frame, v interface{}) error {
-	out := fm.OutputChan()
-	return vals.IterateKeys(v, func(k interface{}) bool {
-		out <- k
-		return true
+	out := fm.ValueOutput()
+	var errPut error
+	errIterate := vals.IterateKeys(v, func(k interface{}) bool {
+		errPut = out.Put(k)
+		return errPut == nil
 	})
+	if errIterate != nil {
+		return errIterate
+	}
+	return errPut
 }
 
 //elvdoc:fn order
@@ -841,8 +877,12 @@ func order(fm *Frame, opts orderOptions, inputs Inputs) error {
 	if errSort != nil {
 		return errSort
 	}
+	out := fm.ValueOutput()
 	for _, v := range values {
-		fm.OutputChan() <- v
+		err := out.Put(v)
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -858,23 +898,21 @@ const (
 
 func compare(a, b interface{}) ordering {
 	switch a := a.(type) {
-	case float64:
-		if b, ok := b.(float64); ok {
-			switch {
-			case math.IsNaN(a):
-				if math.IsNaN(b) {
-					return equal
-				}
-				return less
-			case math.IsNaN(b):
-				return more
-			case a == b:
-				return equal
-			case a < b:
-				return less
+	case int, *big.Int, *big.Rat, float64:
+		switch b.(type) {
+		case int, *big.Int, *big.Rat, float64:
+			a, b := vals.UnifyNums2(a, b, 0)
+			switch a := a.(type) {
+			case int:
+				return compareInt(a, b.(int))
+			case *big.Int:
+				return compareInt(a.Cmp(b.(*big.Int)), 0)
+			case *big.Rat:
+				return compareInt(a.Cmp(b.(*big.Rat)), 0)
+			case float64:
+				return compareFloat(a, b.(float64))
 			default:
-				// a > b
-				return more
+				panic("unreachable")
 			}
 		}
 	case string:
@@ -913,4 +951,33 @@ func compare(a, b interface{}) ordering {
 		}
 	}
 	return uncomparable
+}
+
+func compareInt(a, b int) ordering {
+	if a < b {
+		return less
+	} else if a > b {
+		return more
+	}
+	return equal
+}
+
+func compareFloat(a, b float64) ordering {
+	// For the sake of ordering, NaN's are considered equal to each
+	// other and smaller than all numbers
+	switch {
+	case math.IsNaN(a):
+		if math.IsNaN(b) {
+			return equal
+		}
+		return less
+	case math.IsNaN(b):
+		return more
+	case a < b:
+		return less
+	case a > b:
+		return more
+	default: // a == b
+		return equal
+	}
 }

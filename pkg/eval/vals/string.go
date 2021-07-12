@@ -21,6 +21,7 @@ func ToString(v interface{}) string {
 		return strconv.Itoa(v)
 	case float64:
 		return formatFloat64(v)
+		// Other number types handled by "case Stringer"
 	case string:
 		return v
 	case Stringer:

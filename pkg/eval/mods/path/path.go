@@ -2,10 +2,12 @@
 package path
 
 import (
+	"io/ioutil"
 	"os"
 	"path/filepath"
 
 	"src.elv.sh/pkg/eval"
+	"src.elv.sh/pkg/eval/errs"
 )
 
 // Ns is the namespace for the re: module.
@@ -21,6 +23,8 @@ var fns = map[string]interface{}{
 	"is-abs":        filepath.IsAbs,
 	"is-dir":        isDir,
 	"is-regular":    isRegular,
+	"temp-dir":      tempDir,
+	"temp-file":     tempFile,
 }
 
 //elvdoc:fn abs
@@ -132,13 +136,15 @@ var fns = map[string]interface{}{
 //elvdoc:fn is-dir
 //
 // ```elvish
-// is-dir $path
+// is-dir &follow-symlink=$false $path
 // ```
 //
 // Outputs `$true` if the path resolves to a directory. If the final element of the path is a
 // symlink, even if it points to a directory, it still outputs `$false` since a symlink is not a
-// directory. Use [`eval-symlinks`](#patheval-symlinks) on the path first if you don't care if the
-// final element is a symlink.
+// directory. Setting option `&follow-symlink` to true will cause the last element of the path, if
+// it is a symlink, to be resolved before doing the test.
+//
+// @cf eval-symlinks
 //
 // ```elvish-transcript
 // ~> touch not-a-dir
@@ -148,21 +154,33 @@ var fns = map[string]interface{}{
 // ▶ true
 // ```
 
-func isDir(path string) bool {
-	fi, err := os.Lstat(path)
+type isOpts struct{ FollowSymlink bool }
+
+func (opts *isOpts) SetDefaultOptions() {}
+
+func isDir(opts isOpts, path string) bool {
+	var fi os.FileInfo
+	var err error
+	if opts.FollowSymlink {
+		fi, err = os.Stat(path)
+	} else {
+		fi, err = os.Lstat(path)
+	}
 	return err == nil && fi.Mode().IsDir()
 }
 
 //elvdoc:fn is-regular
 //
 // ```elvish
-// is-regular $path
+// is-regular &follow-symlink=$false $path
 // ```
 //
 // Outputs `$true` if the path resolves to a regular file. If the final element of the path is a
 // symlink, even if it points to a regular file, it still outputs `$false` since a symlink is not a
-// regular file. Use [`eval-symlinks`](#patheval-symlinks) on the path first if you don't care if
-// the final element is a symlink.
+// regular file. Setting option `&follow-symlink` to true will cause the last element of the path,
+// if it is a symlink, to be resolved before doing the test.
+//
+// @cf eval-symlinks
 //
 // ```elvish-transcript
 // ~> touch not-a-dir
@@ -172,7 +190,117 @@ func isDir(path string) bool {
 // ▶ false
 // ```
 
-func isRegular(path string) bool {
-	fi, err := os.Lstat(path)
+func isRegular(opts isOpts, path string) bool {
+	var fi os.FileInfo
+	var err error
+	if opts.FollowSymlink {
+		fi, err = os.Stat(path)
+	} else {
+		fi, err = os.Lstat(path)
+	}
 	return err == nil && fi.Mode().IsRegular()
+}
+
+//elvdoc:fn temp-dir
+//
+// ```elvish
+// temp-dir &dir='' $pattern?
+// ```
+//
+// Creates a new directory and outputs its name.
+//
+// The &dir option determines where the directory will be created; if it is an
+// empty string (the default), a system-dependent directory suitable for storing
+// temporary files will be used. The `$pattern` argument determins the name of
+// the directory, where the last star will be replaced by a random string; it
+// defaults to `elvish-*`.
+//
+// It is the caller's responsibility to remove the directory if it is intended
+// to be temporary.
+//
+// ```elvish-transcript
+// ~> path:temp-dir
+// ▶ /tmp/elvish-RANDOMSTR
+// ~> path:temp-dir x-
+// ▶ /tmp/x-RANDOMSTR
+// ~> path:temp-dir 'x-*.y'
+// ▶ /tmp/x-RANDOMSTR.y
+// ~> path:temp-dir &dir=.
+// ▶ elvish-RANDOMSTR
+// ~> path:temp-dir &dir=/some/dir
+// ▶ /some/dir/elvish-RANDOMSTR
+// ```
+
+type mktempOpt struct{ Dir string }
+
+func (o *mktempOpt) SetDefaultOptions() {}
+
+func tempDir(opts mktempOpt, args ...string) (string, error) {
+	var pattern string
+	switch len(args) {
+	case 0:
+		pattern = "elvish-*"
+	case 1:
+		pattern = args[0]
+	default:
+		return "", errs.ArityMismatch{What: "arguments",
+			ValidLow: 0, ValidHigh: 1, Actual: len(args)}
+	}
+
+	return ioutil.TempDir(opts.Dir, pattern)
+}
+
+//elvdoc:fn temp-file
+//
+// ```elvish
+// temp-file &dir='' $pattern?
+// ```
+//
+// Creates a new file and outputs a [file](language.html#file) object opened
+// for reading and writing.
+//
+// The &dir option determines where the file will be created; if it is an
+// empty string (the default), a system-dependent directory suitable for storing
+// temporary files will be used. The `$pattern` argument determins the name of
+// the file, where the last star will be replaced by a random string; it
+// defaults to `elvish-*`.
+//
+// It is the caller's responsibility to close the file with
+// [`file:close`](file.html#close). The caller should also remove the file if it
+// is intended to be temporary (with `rm $f[name]`).
+//
+// ```elvish-transcript
+// ~> f = path:temp-file
+// ~> put $f[name]
+// ▶ /tmp/elvish-RANDOMSTR
+// ~> echo hello > $f
+// ~> cat $f[name]
+// hello
+// ~> f = path:temp-file x-
+// ~> put $f[name]
+// ▶ /tmp/x-RANDOMSTR
+// ~> f = path:temp-file 'x-*.y'
+// ~> put $f[name]
+// ▶ /tmp/x-RANDOMSTR.y
+// ~> f = path:temp-file &dir=.
+// ~> put $f[name]
+// ▶ elvish-RANDOMSTR
+// ~> f = path:temp-file &dir=/some/dir
+// ~> put $f[name]
+// ▶ /some/dir/elvish-RANDOMSTR
+// ```
+
+func tempFile(opts mktempOpt, args ...string) (*os.File, error) {
+	var pattern string
+	switch len(args) {
+	case 0:
+		pattern = "elvish-*"
+	case 1:
+		pattern = args[0]
+	default:
+		return nil, errs.ArityMismatch{What: "arguments",
+			ValidLow: 0, ValidHigh: 1, Actual: len(args)}
+	}
+
+	return ioutil.TempFile(opts.Dir, pattern)
 }

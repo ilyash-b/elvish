@@ -4,6 +4,8 @@ package errs
 import (
 	"fmt"
 	"strconv"
+
+	"src.elv.sh/pkg/parse"
 )
 
 // OutOfRange encodes an error where a value is out of its valid range.
@@ -14,6 +16,7 @@ type OutOfRange struct {
 	Actual    string
 }
 
+// Error implements the error interface.
 func (e OutOfRange) Error() string {
 	if e.ValidHigh < e.ValidLow {
 		return fmt.Sprintf(
@@ -32,6 +35,7 @@ type BadValue struct {
 	Actual string
 }
 
+// Error implements the error interface.
 func (e BadValue) Error() string {
 	return fmt.Sprintf(
 		"bad value: %v must be %v, but is %v", e.What, e.Valid, e.Actual)
@@ -65,4 +69,29 @@ func nValues(n int) string {
 		return "1 value"
 	}
 	return strconv.Itoa(n) + " values"
+}
+
+// SetReadOnlyVar is returned by the Set method of a read-only variable.
+type SetReadOnlyVar struct {
+	// Name of the read-only variable. This fiels is initially empty, and
+	// populated later when context information is available.
+	VarName string
+}
+
+// Error implements the error interface.
+func (e SetReadOnlyVar) Error() string {
+	return fmt.Sprintf(
+		"cannot set read-only variable $%s", parse.QuoteVariableName(e.VarName))
+}
+
+// ReaderGone is raised by the writer in a pipeline when the reader end has
+// terminated. It could be raised directly by builtin commands, or when an
+// external command gets terminated by SIGPIPE after Elvish detects the read end
+// of the pipe has exited earlier.
+type ReaderGone struct {
+}
+
+// Error implements the error interface.
+func (e ReaderGone) Error() string {
+	return "reader gone"
 }

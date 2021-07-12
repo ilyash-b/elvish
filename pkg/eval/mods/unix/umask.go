@@ -80,6 +80,10 @@ func (UmaskVariable) Set(v interface{}) error {
 			}
 		}
 		umask = int(i)
+	case int:
+		// We don't bother supporting big.Int or bit.Rat because no valid umask value would be
+		// represented by those types.
+		umask = v
 	case float64:
 		intPart, fracPart := math.Modf(v)
 		if fracPart != 0 {
@@ -89,15 +93,13 @@ func (UmaskVariable) Set(v interface{}) error {
 		umask = int(intPart)
 	default:
 		return errs.BadValue{
-			What: "umask", Valid: validUmaskMsg, Actual: vals.ToString(v)}
+			What: "umask", Valid: validUmaskMsg, Actual: vals.Kind(v)}
 	}
 
 	if umask < 0 || umask > 0o777 {
-		// TODO: Switch to `%O` when Go 1.15 is the minimum acceptable version.
-		// Until then the formatting of negative numbers will be weird.
 		return errs.OutOfRange{
 			What: "umask", ValidLow: "0", ValidHigh: "0o777",
-			Actual: fmt.Sprintf("0o%o", umask)}
+			Actual: fmt.Sprintf("%O", umask)}
 	}
 
 	umaskMutex.Lock()

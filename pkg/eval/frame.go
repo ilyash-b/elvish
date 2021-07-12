@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"src.elv.sh/pkg/diag"
+	"src.elv.sh/pkg/eval/errs"
 	"src.elv.sh/pkg/parse"
 	"src.elv.sh/pkg/prog"
 	"src.elv.sh/pkg/strutil"
@@ -94,14 +95,15 @@ func (fm *Frame) InputFile() *os.File {
 	return fm.ports[0].File
 }
 
-// OutputChan returns a channel onto which output can be written.
-func (fm *Frame) OutputChan() chan<- interface{} {
-	return fm.ports[1].Chan
+// ValueOutput returns a handle for writing value outputs.
+func (fm *Frame) ValueOutput() ValueOutput {
+	p := fm.ports[1]
+	return valueOutput{p.Chan, p.sendStop, p.sendError}
 }
 
-// OutputFile returns a file onto which output can be written.
-func (fm *Frame) OutputFile() *os.File {
-	return fm.ports[1].File
+// ByteOutput returns a handle for writing byte outputs.
+func (fm *Frame) ByteOutput() ByteOutput {
+	return byteOutput{fm.ports[1].File}
 }
 
 // ErrorFile returns a file onto which error messages can be written.
@@ -111,22 +113,22 @@ func (fm *Frame) ErrorFile() *os.File {
 
 // IterateInputs calls the passed function for each input element.
 func (fm *Frame) IterateInputs(f func(interface{})) {
-	var w sync.WaitGroup
+	var wg sync.WaitGroup
 	inputs := make(chan interface{})
 
-	w.Add(2)
+	wg.Add(2)
 	go func() {
 		linesToChan(fm.InputFile(), inputs)
-		w.Done()
+		wg.Done()
 	}()
 	go func() {
 		for v := range fm.ports[0].Chan {
 			inputs <- v
 		}
-		w.Done()
+		wg.Done()
 	}()
 	go func() {
-		w.Wait()
+		wg.Wait()
 		close(inputs)
 	}()
 
@@ -211,10 +213,11 @@ func (fm *Frame) errorp(r diag.Ranger, e error) Exception {
 	case Exception:
 		return e
 	default:
-		return &exception{e, &StackTrace{
-			Head: diag.NewContext(fm.srcMeta.Name, fm.srcMeta.Code, r.Range()),
-			Next: fm.traceback,
-		}}
+		ctx := diag.NewContext(fm.srcMeta.Name, fm.srcMeta.Code, r)
+		if _, ok := e.(errs.SetReadOnlyVar); ok {
+			e = errs.SetReadOnlyVar{VarName: ctx.RelevantString()}
+		}
+		return &exception{e, &StackTrace{Head: ctx, Next: fm.traceback}}
 	}
 }
 
