@@ -2,6 +2,7 @@ package complete
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,25 +11,41 @@ import (
 	"src.elv.sh/pkg/eval"
 	"src.elv.sh/pkg/eval/vals"
 	"src.elv.sh/pkg/fsutil"
+	"src.elv.sh/pkg/parse"
+	"src.elv.sh/pkg/parse/np"
 	"src.elv.sh/pkg/ui"
 )
 
-var pathSeparator = string(filepath.Separator)
+const pathSeparator = string(filepath.Separator)
+
+var eachExternal = fsutil.EachExternal
 
 // GenerateFileNames returns filename candidates that are suitable for completing
 // the last argument. It can be used in Config.ArgGenerator.
 func GenerateFileNames(args []string) ([]RawItem, error) {
-	return generateFileNames(args[len(args)-1], false)
+	if len(args) == 0 {
+		return nil, nil
+	}
+	return generateFileNames(args[len(args)-1], nil)
+}
+
+// GenerateFileNames returns directory name candidates that are suitable for
+// completing the last argument. It can be used in Config.ArgGenerator.
+func GenerateDirNames(args []string) ([]RawItem, error) {
+	if len(args) == 0 {
+		return nil, nil
+	}
+	return generateFileNames(args[len(args)-1], fs.FileInfo.IsDir)
 }
 
 // GenerateForSudo generates candidates for sudo.
-func GenerateForSudo(cfg Config, args []string) ([]RawItem, error) {
+func GenerateForSudo(args []string, ev *eval.Evaler, cfg Config) ([]RawItem, error) {
 	switch {
 	case len(args) < 2:
 		return nil, errNoCompletion
 	case len(args) == 2:
 		// Complete external commands.
-		return generateExternalCommands(args[1], cfg.PureEvaler)
+		return generateExternalCommands(args[1])
 	default:
 		return cfg.ArgGenerator(args[1:])
 	}
@@ -36,20 +53,58 @@ func GenerateForSudo(cfg Config, args []string) ([]RawItem, error) {
 
 // Internal generators, used from completers.
 
-func generateExternalCommands(seed string, ev PureEvaler) ([]RawItem, error) {
+func generateArgs(args []string, ev *eval.Evaler, p np.Path, cfg Config) ([]RawItem, error) {
+	switch args[0] {
+	case "set", "tmp":
+		for i := 1; i < len(args); i++ {
+			if args[i] == "=" {
+				if i == len(args)-1 {
+					// Completing the "=" itself; don't offer any candidates.
+					return nil, nil
+				} else {
+					// Completing an argument after "="; fall back to the
+					// default arg generator.
+					return cfg.ArgGenerator(args)
+				}
+			}
+		}
+		seed := args[len(args)-1]
+		sigil, qname := eval.SplitSigil(seed)
+		ns, _ := eval.SplitIncompleteQNameNs(qname)
+		var items []RawItem
+		eachVariableInNs(ev, p, ns, func(varname string) {
+			items = append(items, noQuoteItem(sigil+parse.QuoteVariableName(ns+varname)))
+		})
+		return items, nil
+	case "del":
+		// This partially duplicates eachVariableInNs with ns = "", but we don't
+		// offer builtin variables.
+		var items []RawItem
+		addItem := func(varname string) {
+			items = append(items, noQuoteItem(parse.QuoteVariableName(varname)))
+		}
+		ev.Global().IterateKeysString(addItem)
+		eachDefinedVariable(p[len(p)-1], p[0].Range().From, addItem)
+		return items, nil
+	}
+
+	return cfg.ArgGenerator(args)
+}
+
+func generateExternalCommands(seed string) ([]RawItem, error) {
 	if fsutil.DontSearch(seed) {
 		// Completing a local external command name.
-		return generateFileNames(seed, true)
+		return generateFileNames(seed, executableOrDir)
 	}
 	var items []RawItem
-	ev.EachExternal(func(s string) { items = append(items, PlainItem(s)) })
+	eachExternal(func(s string) { items = append(items, PlainItem(s)) })
 	return items, nil
 }
 
-func generateCommands(seed string, ev PureEvaler) ([]RawItem, error) {
+func generateCommands(seed string, ev *eval.Evaler, p np.Path) ([]RawItem, error) {
 	if fsutil.DontSearch(seed) {
 		// Completing a local external command name.
-		return generateFileNames(seed, true)
+		return generateFileNames(seed, executableOrDir)
 	}
 
 	var cands []RawItem
@@ -57,30 +112,30 @@ func generateCommands(seed string, ev PureEvaler) ([]RawItem, error) {
 
 	if strings.HasPrefix(seed, "e:") {
 		// Generate all external commands with the e: prefix, and be done.
-		ev.EachExternal(func(command string) {
+		eachExternal(func(command string) {
 			addPlainItem("e:" + command)
 		})
 		return cands, nil
 	}
 
 	// Generate all special forms.
-	ev.EachSpecial(addPlainItem)
+	for name := range eval.IsBuiltinSpecial {
+		addPlainItem(name)
+	}
 	// Generate all external commands (without the e: prefix).
-	ev.EachExternal(addPlainItem)
+	eachExternal(addPlainItem)
 
 	sigil, qname := eval.SplitSigil(seed)
 	ns, _ := eval.SplitIncompleteQNameNs(qname)
 	if sigil == "" {
 		// Generate functions, namespaces, and variable assignments.
-		ev.EachVariableInNs(ns, func(varname string) {
+		eachVariableInNs(ev, p, ns, func(varname string) {
 			switch {
 			case strings.HasSuffix(varname, eval.FnSuffix):
 				addPlainItem(
 					ns + varname[:len(varname)-len(eval.FnSuffix)])
 			case strings.HasSuffix(varname, eval.NsSuffix):
 				addPlainItem(ns + varname)
-			default:
-				cands = append(cands, noQuoteItem(ns+varname+" = "))
 			}
 		})
 	}
@@ -88,7 +143,7 @@ func generateCommands(seed string, ev PureEvaler) ([]RawItem, error) {
 	return cands, nil
 }
 
-func generateFileNames(seed string, onlyExecutable bool) ([]RawItem, error) {
+func generateFileNames(seed string, statPred func(fs.FileInfo) bool) ([]RawItem, error) {
 	var items []RawItem
 
 	dir, fileprefix := filepath.Split(seed)
@@ -107,7 +162,7 @@ func generateFileNames(seed string, onlyExecutable bool) ([]RawItem, error) {
 	// Make candidates out of elements that match the file component.
 	for _, file := range files {
 		name := file.Name()
-		info, err := file.Info()
+		stat, err := file.Info()
 		if err != nil {
 			continue
 		}
@@ -116,9 +171,8 @@ func generateFileNames(seed string, onlyExecutable bool) ([]RawItem, error) {
 		if dotfile(fileprefix) != dotfile(name) {
 			continue
 		}
-		// Only accept searchable directories and executable files if
-		// executableOnly is true.
-		if onlyExecutable && (info.Mode()&0111) == 0 {
+		// Apply statPred if given.
+		if statPred != nil && !statPred(stat) {
 			continue
 		}
 
@@ -128,13 +182,12 @@ func generateFileNames(seed string, onlyExecutable bool) ([]RawItem, error) {
 		// Will be set to an empty space for non-directories
 		suffix := " "
 
-		if info.IsDir() {
+		if stat.IsDir() {
 			full += pathSeparator
 			suffix = ""
-		} else if info.Mode()&os.ModeSymlink != 0 {
+		} else if stat.Mode()&os.ModeSymlink != 0 {
 			stat, err := os.Stat(full)
-			if err == nil && stat.IsDir() {
-				// Symlink to directory.
+			if err == nil && stat.IsDir() { // symlink to directory
 				full += pathSeparator
 				suffix = ""
 			}
@@ -150,9 +203,13 @@ func generateFileNames(seed string, onlyExecutable bool) ([]RawItem, error) {
 	return items, nil
 }
 
-func generateIndices(v interface{}) []RawItem {
+func executableOrDir(stat fs.FileInfo) bool {
+	return fsutil.IsExecutable(stat) || stat.IsDir()
+}
+
+func generateIndices(v any) []RawItem {
 	var items []RawItem
-	vals.IterateKeys(v, func(k interface{}) bool {
+	vals.IterateKeys(v, func(k any) bool {
 		if kstring, ok := k.(string); ok {
 			items = append(items, PlainItem(kstring))
 		}

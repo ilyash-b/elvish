@@ -4,13 +4,11 @@ import (
 	"fmt"
 	"os"
 	"os/user"
+	"runtime"
 	"strings"
 
 	"src.elv.sh/pkg/env"
 )
-
-// CurrentUser allows for unit test error injection.
-var CurrentUser func() (*user.User, error) = user.Current
 
 // GetHome finds the home directory of a specified user. When given an empty
 // string, it finds the home directory of the current user.
@@ -20,7 +18,11 @@ func GetHome(uname string) (string, error) {
 		// variable.
 		home := os.Getenv(env.HOME)
 		if home != "" {
-			return strings.TrimRight(home, pathSep), nil
+			if runtime.GOOS == "windows" {
+				return strings.TrimRight(home, "/\\"), nil
+			} else {
+				return strings.TrimRight(home, "/"), nil
+			}
 		}
 	}
 
@@ -28,7 +30,7 @@ func GetHome(uname string) (string, error) {
 	var u *user.User
 	var err error
 	if uname == "" {
-		u, err = CurrentUser()
+		u, err = user.Current()
 	} else {
 		u, err = user.Lookup(uname)
 	}

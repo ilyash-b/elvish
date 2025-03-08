@@ -1,5 +1,4 @@
-//go:build !windows && !plan9
-// +build !windows,!plan9
+//go:build unix
 
 package term
 
@@ -8,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"src.elv.sh/pkg/testutil"
+	"src.elv.sh/pkg/must"
 	"src.elv.sh/pkg/ui"
 )
 
@@ -212,7 +211,7 @@ func TestReader_ReadRawEvent(t *testing.T) {
 }
 
 func setupReader(t *testing.T) (Reader, *os.File) {
-	pr, pw := testutil.MustPipe()
+	pr, pw := must.Pipe()
 	r := NewReader(pr)
 	t.Cleanup(func() {
 		r.Close()

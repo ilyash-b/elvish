@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"src.elv.sh/pkg/daemon/daemondefs"
+	"src.elv.sh/pkg/must"
 	"src.elv.sh/pkg/testutil"
 )
 
@@ -47,7 +48,7 @@ func TestActivate_RemovesHangingSocketAndSpawnsNewServer(t *testing.T) {
 		activated++
 		return nil
 	})
-	makeHangingUNIXSocket(t, "sock")
+	makeHangingUnixSocket(t, "sock")
 
 	_, err := Activate(io.Discard,
 		&daemondefs.SpawnConfig{DbPath: "db", SockPath: "sock", RunDir: "."})
@@ -67,7 +68,7 @@ func TestActivate_FailsIfCannotStatSock(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		// POSIX lstat(2) returns ENOTDIR instead of ENOENT if a path prefix is
 		// not a directory.
-		testutil.MustCreateEmpty("not-dir")
+		must.CreateEmpty("not-dir")
 		badSockPath = "not-dir/sock"
 	} else {
 		// Use a syntactically invalid drive letter on Windows.
@@ -82,7 +83,7 @@ func TestActivate_FailsIfCannotStatSock(t *testing.T) {
 
 func TestActivate_FailsIfCannotDialSock(t *testing.T) {
 	setup(t)
-	testutil.MustCreateEmpty("sock")
+	must.CreateEmpty("sock")
 	_, err := Activate(io.Discard,
 		&daemondefs.SpawnConfig{DbPath: "db", SockPath: "sock", RunDir: "."})
 	if err == nil {
@@ -93,21 +94,16 @@ func TestActivate_FailsIfCannotDialSock(t *testing.T) {
 func setupForActivate(t *testing.T, f func(string, []string, *os.ProcAttr) error) {
 	setup(t)
 
-	saveStartProcess := startProcess
-	t.Cleanup(func() { startProcess = saveStartProcess })
-	startProcess = f
-
+	testutil.Set(t, &startProcess, f)
 	scaleDuration(t, &daemonSpawnTimeout)
 	scaleDuration(t, &daemonKillTimeout)
 }
 
 func scaleDuration(t *testing.T, d *time.Duration) {
-	save := *d
-	t.Cleanup(func() { *d = save })
-	*d = testutil.Scaled(*d)
+	testutil.Set(t, d, testutil.Scaled(*d))
 }
 
-func makeHangingUNIXSocket(t *testing.T, path string) {
+func makeHangingUnixSocket(t *testing.T, path string) {
 	t.Helper()
 
 	l, err := net.Listen("unix", path)

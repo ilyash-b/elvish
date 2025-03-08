@@ -1,0 +1,47 @@
+/////////////////////
+# complete-filename #
+/////////////////////
+//complete-filename-in-global
+// Don't crash with no argument. Regression test for b.elv.sh/1799.
+~> complete-filename
+
+/////////////////////
+# complex-candidate #
+/////////////////////
+
+//each:complex-candidate-in-global
+
+## construction ##
+~> complex-candidate a/b
+▶ (edit:complex-candidate a/b &code-suffix='' &display=[^styled])
+~> complex-candidate a/b &code-suffix=' '
+▶ (edit:complex-candidate a/b &code-suffix=' ' &display=[^styled])
+~> complex-candidate a/b &code-suffix=' ' &display=A/B
+▶ (edit:complex-candidate a/b &code-suffix=' ' &display=[^styled A/B])
+~> complex-candidate a/b &code-suffix=' ' &display=(styled A/B red)
+▶ (edit:complex-candidate a/b &code-suffix=' ' &display=[^styled (styled-segment A/B &fg-color=red)])
+~> complex-candidate a/b &code-suffix=' ' &display=[]
+Exception: bad value: &display must be string or styled, but is []
+  [tty]:1:1-50: complex-candidate a/b &code-suffix=' ' &display=[]
+
+## value operations ##
+~> kind-of (complex-candidate stem)
+▶ map
+~> keys (complex-candidate stem)
+▶ stem
+▶ code-suffix
+▶ display
+~> repr (complex-candidate a/b &code-suffix=' ' &display=A/B)
+(edit:complex-candidate a/b &code-suffix=' ' &display=[^styled A/B])
+~> eq (complex-candidate stem) (complex-candidate stem)
+▶ $true
+~> eq (complex-candidate stem &code-suffix=' ') (complex-candidate stem)
+▶ $false
+~> eq (complex-candidate stem &display=STEM) (complex-candidate stem)
+▶ $false
+~> put [&(complex-candidate stem)=value][(complex-candidate stem)]
+▶ value
+~> put (complex-candidate a/b &code-suffix=' ' &display=A/B)[stem code-suffix display]
+▶ a/b
+▶ ' '
+▶ [^styled A/B]

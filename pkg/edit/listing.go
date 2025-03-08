@@ -12,6 +12,7 @@ import (
 	"src.elv.sh/pkg/eval/vals"
 	"src.elv.sh/pkg/eval/vars"
 	"src.elv.sh/pkg/store/storedefs"
+	"src.elv.sh/pkg/ui"
 )
 
 func initListings(ed *Editor, ev *eval.Evaler, st storedefs.Store, histStore histutil.Store, nb eval.NsBuilder) {
@@ -20,7 +21,7 @@ func initListings(ed *Editor, ev *eval.Evaler, st storedefs.Store, histStore his
 	nb.AddNs("listing",
 		eval.BuildNsNamed("edit:listing").
 			AddVar("binding", bindingVar).
-			AddGoFns(map[string]interface{}{
+			AddGoFns(map[string]any{
 				"accept":     func() { listingAccept(app) },
 				"up":         func() { listingUp(app) },
 				"down":       func() { listingDown(app) },
@@ -28,7 +29,7 @@ func initListings(ed *Editor, ev *eval.Evaler, st storedefs.Store, histStore his
 				"down-cycle": func() { listingDownCycle(app) },
 				"page-up":    func() { listingPageUp(app) },
 				"page-down":  func() { listingPageDown(app) },
-				"start-custom": func(fm *eval.Frame, opts customListingOpts, items interface{}) {
+				"start-custom": func(fm *eval.Frame, opts customListingOpts, items any) {
 					listingStartCustom(ed, fm, opts, items)
 				},
 			}))
@@ -53,27 +54,31 @@ func initHistlist(ed *Editor, ev *eval.Evaler, histStore histutil.Store, commonB
 	bindingVar := newBindingVar(emptyBindingsMap)
 	bindings := newMapBindings(ed, ev, bindingVar, commonBindingVar)
 	dedup := newBoolVar(true)
-	nb.AddNs("histlist",
-		eval.BuildNsNamed("edit:histlist").
-			AddVar("binding", bindingVar).
-			AddGoFns(map[string]interface{}{
-				"start": func() {
-					w, err := modes.NewHistlist(ed.app, modes.HistlistSpec{
-						Bindings: bindings,
-						AllCmds:  histStore.AllCmds,
-						Dedup: func() bool {
-							return dedup.Get().(bool)
-						},
-						Filter: filterSpec,
-					})
-					startMode(ed.app, w, err)
-				},
-				"toggle-dedup": func() {
-					dedup.Set(!dedup.Get().(bool))
-					listingRefilter(ed.app)
-					ed.app.Redraw()
-				},
-			}))
+	ns := eval.BuildNsNamed("edit:histlist").
+		AddVar("binding", bindingVar).
+		AddGoFns(map[string]any{
+			"start": func() {
+				w, err := modes.NewHistlist(ed.app, modes.HistlistSpec{
+					Bindings: bindings,
+					AllCmds:  histStore.AllCmds,
+					Dedup: func() bool {
+						return dedup.Get().(bool)
+					},
+					Filter: filterSpec,
+					CodeAreaRPrompt: func() ui.Text {
+						return bindingTips(ed.ns, "histlist:binding",
+							bindingTip("dedup", "histlist:toggle-dedup"))
+					},
+				})
+				startMode(ed.app, w, err)
+			},
+			"toggle-dedup": func() {
+				dedup.Set(!dedup.Get().(bool))
+				listingRefilter(ed.app)
+				ed.app.Redraw()
+			},
+		}).Ns()
+	nb.AddNs("histlist", ns)
 }
 
 func initLastcmd(ed *Editor, ev *eval.Evaler, histStore histutil.Store, commonBindingVar vars.PtrVar, nb eval.NsBuilder) {
@@ -118,23 +123,21 @@ func initLocation(ed *Editor, ev *eval.Evaler, st storedefs.Store, commonBinding
 				})
 				startMode(ed.app, w, err)
 			}))
-	ev.AddAfterChdir(func(string) {
+	ev.AfterChdir = append(ev.AfterChdir, func(string) {
 		wd, err := os.Getwd()
 		if err != nil {
 			// TODO(xiaq): Surface the error.
 			return
 		}
-		st.AddDir(wd, 1)
-		kind, root := workspaceIterator.Parse(wd)
-		if kind != "" {
-			st.AddDir(kind+wd[len(root):], 1)
+		if st != nil {
+			st.AddDir(wd, 1)
+			kind, root := workspaceIterator.Parse(wd)
+			if kind != "" {
+				st.AddDir(kind+wd[len(root):], 1)
+			}
 		}
 	})
 }
-
-//elvdoc:fn listing:accept
-//
-// Accepts the current selected listing item.
 
 func listingAccept(app cli.App) {
 	if w, ok := activeComboBox(app); ok {
@@ -142,53 +145,19 @@ func listingAccept(app cli.App) {
 	}
 }
 
-//elvdoc:fn listing:up
-//
-// Moves the cursor up in listing mode.
-
 func listingUp(app cli.App) { listingSelect(app, tk.Prev) }
-
-//elvdoc:fn listing:down
-//
-// Moves the cursor down in listing mode.
 
 func listingDown(app cli.App) { listingSelect(app, tk.Next) }
 
-//elvdoc:fn listing:up-cycle
-//
-// Moves the cursor up in listing mode, or to the last item if the first item is
-// currently selected.
-
 func listingUpCycle(app cli.App) { listingSelect(app, tk.PrevWrap) }
-
-//elvdoc:fn listing:down-cycle
-//
-// Moves the cursor down in listing mode, or to the first item if the last item is
-// currently selected.
 
 func listingDownCycle(app cli.App) { listingSelect(app, tk.NextWrap) }
 
-//elvdoc:fn listing:page-up
-//
-// Moves the cursor up one page.
-
 func listingPageUp(app cli.App) { listingSelect(app, tk.PrevPage) }
-
-//elvdoc:fn listing:page-down
-//
-// Moves the cursor down one page.
 
 func listingPageDown(app cli.App) { listingSelect(app, tk.NextPage) }
 
-//elvdoc:fn listing:left
-//
-// Moves the cursor left in listing mode.
-
 func listingLeft(app cli.App) { listingSelect(app, tk.Left) }
-
-//elvdoc:fn listing:right
-//
-// Moves the cursor right in listing mode.
 
 func listingRight(app cli.App) { listingSelect(app, tk.Right) }
 
@@ -204,22 +173,9 @@ func listingRefilter(app cli.App) {
 	}
 }
 
-//elvdoc:var location:hidden
-//
-// A list of directories to hide in the location addon.
-
-//elvdoc:var location:pinned
-//
-// A list of directories to always show at the top of the list of the location
-// addon.
-
-//elvdoc:var location:workspaces
-//
-// A map mapping types of workspaces to their patterns.
-
 func adaptToIterateString(variable vars.Var) func(func(string)) {
 	return func(f func(s string)) {
-		vals.Iterate(variable.Get(), func(v interface{}) bool {
+		vals.Iterate(variable.Get(), func(v any) bool {
 			f(vals.ToString(v))
 			return true
 		})
@@ -254,6 +210,11 @@ func (d dirStore) Chdir(path string) error {
 }
 
 func (d dirStore) Dirs(blacklist map[string]struct{}) ([]storedefs.Dir, error) {
+	if d.st == nil {
+		// A "no daemon" build won't have have a storedefs.Store object.
+		// Fail gracefully rather than panic.
+		return []storedefs.Dir{}, nil
+	}
 	return d.st.Dirs(blacklist)
 }
 

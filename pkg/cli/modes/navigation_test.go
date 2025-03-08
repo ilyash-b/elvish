@@ -9,6 +9,7 @@ import (
 	"src.elv.sh/pkg/cli/lscolors"
 	"src.elv.sh/pkg/cli/term"
 	"src.elv.sh/pkg/cli/tk"
+	"src.elv.sh/pkg/must"
 	"src.elv.sh/pkg/testutil"
 	"src.elv.sh/pkg/ui"
 )
@@ -37,9 +38,8 @@ func TestErrorInAscend(t *testing.T) {
 	startNavigation(f.App, NavigationSpec{Cursor: c})
 
 	f.TTY.Inject(term.K(ui.Left))
-	f.TestTTYNotes(t,
-		"error: cannot ascend", Styles,
-		"!!!!!!")
+	f.TTY.TestMsg(t, ui.Concat(
+		ui.T("error:", ui.FgRed), ui.T(" cannot ascend")))
 }
 
 func TestErrorInDescend(t *testing.T) {
@@ -52,9 +52,8 @@ func TestErrorInDescend(t *testing.T) {
 
 	f.TTY.Inject(term.K(ui.Down))
 	f.TTY.Inject(term.K(ui.Right))
-	f.TestTTYNotes(t,
-		"error: cannot descend", Styles,
-		"!!!!!!")
+	f.TTY.TestMsg(t, ui.Concat(
+		ui.T("error:", ui.FgRed), ui.T(" cannot descend")))
 }
 
 func TestErrorInCurrent(t *testing.T) {
@@ -139,13 +138,28 @@ func TestWidthRatio(t *testing.T) {
 	)
 }
 
-func TestGetSelectedName(t *testing.T) {
+func TestNavigation_SelectedName(t *testing.T) {
 	f := Setup()
 	defer f.Stop()
 
 	w := startNavigation(f.App, NavigationSpec{Cursor: getTestCursor()})
 
 	wantName := "d1"
+	if name := w.SelectedName(); name != wantName {
+		t.Errorf("Got name %q, want %q", name, wantName)
+	}
+}
+
+func TestNavigation_SelectedName_EmptyDirectory(t *testing.T) {
+	f := Setup()
+	defer f.Stop()
+
+	cursor := &testCursor{
+		root: testutil.Dir{"d": testutil.Dir{}},
+		pwd:  []string{"d"}}
+	w := startNavigation(f.App, NavigationSpec{Cursor: cursor})
+
+	wantName := ""
 	if name := w.SelectedName(); name != wantName {
 		t.Errorf("Got name %q, want %q", name, wantName)
 	}
@@ -160,7 +174,7 @@ func TestNavigation_RealFS(t *testing.T) {
 	testutil.InTempDir(t)
 	testutil.ApplyDir(testDir)
 
-	testutil.MustChdir("d")
+	must.Chdir("d")
 	testNavigation(t, nil)
 }
 
@@ -271,7 +285,7 @@ func testNavigation(t *testing.T, c NavigationCursor) {
 	// only shows d2 after filtering.
 	w.MutateFiltering(func(bool) bool { return true })
 	f.TTY.Inject(term.K('2'))
-	f.TestTTY(t,
+	dFilter2Buf := f.MakeBuffer(
 		"\n",
 		" NAVIGATING  2", Styles,
 		"************  ", term.DotHere, "\n",
@@ -282,6 +296,11 @@ func testNavigation(t *testing.T, c NavigationCursor) {
 		" f                   other.png          ", Styles,
 		"                    !!!!!!!!!!!!!!!!!!!!",
 	)
+	f.TTY.TestBuffer(t, dFilter2Buf)
+
+	// Unbound key while filtering is ignored.
+	f.TTY.Inject(term.K('a', ui.Alt))
+	f.TTY.TestBuffer(t, dFilter2Buf)
 	w.MutateFiltering(func(bool) bool { return false })
 
 	// Now move into d2, and test that the filter has been cleared when

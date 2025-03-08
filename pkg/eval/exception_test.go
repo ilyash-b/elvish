@@ -3,14 +3,13 @@ package eval_test
 import (
 	"errors"
 	"reflect"
-	"runtime"
 	"testing"
 	"unsafe"
 
 	"src.elv.sh/pkg/diag"
 	. "src.elv.sh/pkg/eval"
+	"src.elv.sh/pkg/testutil"
 
-	. "src.elv.sh/pkg/eval/evaltest"
 	"src.elv.sh/pkg/eval/vals"
 	"src.elv.sh/pkg/persistent/hash"
 	"src.elv.sh/pkg/tt"
@@ -18,10 +17,10 @@ import (
 
 func TestReason(t *testing.T) {
 	err := errors.New("ordinary error")
-	tt.Test(t, tt.Fn("Reason", Reason), tt.Table{
-		tt.Args(err).Rets(err),
-		tt.Args(makeException(err)).Rets(err),
-	})
+	tt.Test(t, Reason,
+		Args(err).Rets(err),
+		Args(makeException(err)).Rets(err),
+	)
 }
 
 func TestException(t *testing.T) {
@@ -33,15 +32,54 @@ func TestException(t *testing.T) {
 		Hash(hash.Pointer(unsafe.Pointer(reflect.ValueOf(exc).Pointer()))).
 		Equal(exc).
 		NotEqual(makeException(errors.New("error"))).
-		AllKeys("reason").
+		AllKeys("reason", "stack-trace").
 		Index("reason", err).
 		IndexError("stack", vals.NoSuchKey("stack")).
-		Repr("[&reason=[&content=error &type=fail]]")
+		Repr("[^exception &reason=[^fail-error &content=error &type=fail] &stack-trace=<...>]")
 
 	vals.TestValue(t, OK).
 		Kind("exception").
 		Bool(true).
 		Repr("$ok")
+}
+
+func TestException_Show(t *testing.T) {
+	for _, p := range []*string{
+		ExceptionCauseStartMarker, ExceptionCauseEndMarker,
+		&diag.ContextBodyStartMarker, &diag.ContextBodyEndMarker} {
+
+		testutil.Set(t, p, "")
+	}
+
+	tt.Test(t, Exception.Show,
+		It("supports exceptions with one traceback frame").
+			Args(makeException(
+				errors.New("internal error"),
+				diag.NewContext("a.elv", "echo bad", diag.Ranging{From: 5, To: 8})), "").
+			Rets(Dedent(`
+				Exception: internal error
+				  a.elv:1:6-8: echo bad`)),
+
+		It("supports exceptions with multiple traceback frames").
+			Args(makeException(
+				errors.New("internal error"),
+				diag.NewContext("a.elv", "echo bad", diag.Ranging{From: 5, To: 8}),
+				diag.NewContext("b.elv", "use foo", diag.Ranging{From: 0, To: 7})), "").
+			Rets(Dedent(`
+				Exception: internal error
+				  a.elv:1:6-8: echo bad
+				  b.elv:1:1-7: use foo`)),
+
+		It("supports traceback frames with multi-line body text").
+			Args(makeException(
+				errors.New("internal error"),
+				diag.NewContext("a.elv", "echo ba\nd", diag.Ranging{From: 5, To: 9})), "").
+			Rets(Dedent(`
+				Exception: internal error
+				  a.elv:1:6-2:1:
+				    echo ba
+				    d`)),
+	)
 }
 
 func makeException(cause error, entries ...*diag.Context) Exception {
@@ -57,44 +95,17 @@ func makeStackTrace(entries ...*diag.Context) *StackTrace {
 	return s
 }
 
-func TestFlow_Fields(t *testing.T) {
-	Test(t,
-		That("put ?(return)[reason][type name]").Puts("flow", "return"),
-	)
-}
-
-func TestExternalCmdExit_Fields(t *testing.T) {
-	badCmd := "false"
-	if runtime.GOOS == "windows" {
-		badCmd = "cmd /c exit 1"
-	}
-	Test(t,
-		That("put ?("+badCmd+")[reason][type exit-status]").
-			Puts("external-cmd/exited", "1"),
-		// TODO: Test killed and stopped commands
-	)
-}
-
-func TestPipelineError_Fields(t *testing.T) {
-	Test(t,
-		That("put ?(fail 1 | fail 2)[reason][type]").Puts("pipeline"),
-		That("count ?(fail 1 | fail 2)[reason][exceptions]").Puts(2),
-		That("put ?(fail 1 | fail 2)[reason][exceptions][0][reason][type]").
-			Puts("fail"),
-	)
-}
-
 func TestErrorMethods(t *testing.T) {
-	tt.Test(t, tt.Fn("Error", error.Error), tt.Table{
-		tt.Args(makeException(errors.New("err"))).Rets("err"),
+	tt.Test(t, error.Error,
+		Args(makeException(errors.New("err"))).Rets("err"),
 
-		tt.Args(MakePipelineError([]Exception{
+		Args(MakePipelineError([]Exception{
 			makeException(errors.New("err1")),
 			makeException(errors.New("err2"))})).Rets("(err1 | err2)"),
 
-		tt.Args(Return).Rets("return"),
-		tt.Args(Break).Rets("break"),
-		tt.Args(Continue).Rets("continue"),
-		tt.Args(Flow(1000)).Rets("!(BAD FLOW: 1000)"),
-	})
+		Args(Return).Rets("return"),
+		Args(Break).Rets("break"),
+		Args(Continue).Rets("continue"),
+		Args(Flow(1000)).Rets("!(BAD FLOW: 1000)"),
+	)
 }

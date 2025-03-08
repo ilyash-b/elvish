@@ -58,24 +58,22 @@ func interact(ev *eval.Evaler, fds [3]*os.File, cfg *interactCfg) {
 			fmt.Fprintln(fds[2], "Cannot connect to daemon:", err)
 			fmt.Fprintln(fds[2], "Daemon-related functions will likely not work.")
 		}
-		defer func() {
-			err := cl.Close()
-			if err != nil {
-				fmt.Fprintln(fds[2],
-					"warning: failed to close connection to daemon:", err)
-			}
-		}()
-		daemonClient = cl
-		// Even if error is not nil, we install daemon-related functionalities
-		// anyway. Daemon may eventually come online and become functional.
-		ev.AddBeforeExit(func() { cl.Close() })
-		ev.AddModule("store", store.Ns(cl))
-		ev.AddModule("daemon", daemon.Ns(cl))
+		if cl != nil {
+			// Even if error is not nil, we install daemon-related
+			// functionalities anyway. Daemon may eventually come online and
+			// become functional.
+			daemonClient = cl
+			ev.PreExitHooks = append(ev.PreExitHooks, func() { cl.Close() })
+			ev.AddModule("store", store.Ns(cl))
+			ev.AddModule("daemon", daemon.Ns(cl))
+		}
 	}
 
 	// Build Editor.
 	var ed editor
-	if sys.IsATTY(fds[0]) {
+	if sys.IsATTY(fds[0].Fd()) {
+		restoreTTY := term.SetupForTUIOnce(fds[0], fds[1])
+		defer restoreTTY()
 		newed := edit.NewEditor(cli.NewTTY(fds[0], fds[2]), ev, daemonClient)
 		ev.ExtendBuiltin(eval.BuildNs().AddNs("edit", newed))
 		ev.BgJobNotify = func(s string) { newed.Notify(ui.T(s)) }
@@ -91,8 +89,6 @@ func interact(ev *eval.Evaler, fds [3]*os.File, cfg *interactCfg) {
 			diag.ShowError(fds[2], err)
 		}
 	}
-
-	term.Sanitize(fds[0], fds[2])
 
 	cooldown := time.Second
 	cmdNum := 0
@@ -128,10 +124,8 @@ func interact(ev *eval.Evaler, fds [3]*os.File, cfg *interactCfg) {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
-		src := parse.Source{Name: fmt.Sprintf("[tty %v]", cmdNum), Code: line}
-		duration, err := evalInTTY(ev, fds, src)
-		ed.RunAfterCommandHooks(src, duration, err)
-		term.Sanitize(fds[0], fds[2])
+		err = evalInTTY(fds, ev, ed,
+			parse.Source{Name: fmt.Sprintf("[tty %v]", cmdNum), Code: line})
 		if err != nil {
 			diag.ShowError(fds[2], err)
 		}
@@ -163,10 +157,7 @@ func sourceRC(fds [3]*os.File, ev *eval.Evaler, ed editor, rcPath string) error 
 		}
 		return err
 	}
-	src := parse.Source{Name: absPath, Code: code, IsFile: true}
-	duration, err := evalInTTY(ev, fds, src)
-	ed.RunAfterCommandHooks(src, duration, err)
-	return err
+	return evalInTTY(fds, ev, ed, parse.Source{Name: absPath, Code: code, IsFile: true})
 }
 
 type minEditor struct {

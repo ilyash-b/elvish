@@ -70,7 +70,10 @@ func TestDetermineFeature(t *testing.T) {
 		test("socket", "sock", featureSocket, opt{setupErr: err})
 	}
 
-	// TODO: Test featureDoor on Solaris
+	testutil.Set(t, &isDoorFunc,
+		func(info os.FileInfo) bool { return info.Name() == "door" })
+	err = create("door")
+	test("door (fake)", "door", featureDoor, opt{setupErr: err})
 
 	chr, err := findDevice(os.ModeDevice | os.ModeCharDevice)
 	test("char device", chr, featureCharDevice, opt{setupErr: err})
@@ -80,6 +83,9 @@ func TestDetermineFeature(t *testing.T) {
 
 	err = mkdirMode("d", 0700)
 	test("normal dir", "d", featureDirectory, opt{setupErr: err})
+	// Regression test for b.elv.sh/1710.
+	test("directory with mh=true", "d", featureDirectory, opt{setupErr: err, mh: true})
+
 	err = mkdirMode("d-wws", 0777|os.ModeSticky)
 	test("world-writable sticky dir", "d-wws", featureWorldWritableStickyDirectory, opt{setupErr: err})
 	err = mkdirMode("d-ww", 0777)

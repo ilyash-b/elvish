@@ -14,7 +14,7 @@ import (
 )
 
 // Exception represents exceptions. It is both a Value accessible to Elvish
-// code, and can be returned by methods like like (*Evaler).Eval.
+// code, and can be returned by methods like (*Evaler).Eval.
 type Exception interface {
 	error
 	diag.Shower
@@ -36,6 +36,8 @@ type exception struct {
 	reason     error
 	stackTrace *StackTrace
 }
+
+var _ vals.PseudoMap = &exception{}
 
 // StackTrace represents a stack trace as a linked list of diag.Context. The
 // head is the innermost stack.
@@ -69,6 +71,11 @@ func (exc *exception) StackTrace() *StackTrace { return exc.stackTrace }
 // Error returns the message of the cause of the exception.
 func (exc *exception) Error() string { return exc.reason.Error() }
 
+var (
+	exceptionCauseStartMarker = "\033[31;1m"
+	exceptionCauseEndMarker   = "\033[m"
+)
+
 // Show shows the exception.
 func (exc *exception) Show(indent string) string {
 	buf := new(bytes.Buffer)
@@ -79,20 +86,14 @@ func (exc *exception) Show(indent string) string {
 	} else if exc.reason == nil {
 		causeDescription = "ok"
 	} else {
-		causeDescription = "\033[31;1m" + exc.reason.Error() + "\033[m"
+		causeDescription = exceptionCauseStartMarker + exc.reason.Error() + exceptionCauseEndMarker
 	}
 	fmt.Fprintf(buf, "Exception: %s", causeDescription)
 
 	if exc.stackTrace != nil {
-		buf.WriteString("\n")
-		if exc.stackTrace.Next == nil {
-			buf.WriteString(exc.stackTrace.Head.ShowCompact(indent))
-		} else {
-			buf.WriteString(indent + "Traceback:")
-			for tb := exc.stackTrace; tb != nil; tb = tb.Next {
-				buf.WriteString("\n" + indent + "  ")
-				buf.WriteString(tb.Head.Show(indent + "    "))
-			}
+		for tb := exc.stackTrace; tb != nil; tb = tb.Next {
+			buf.WriteString("\n" + indent + "  ")
+			buf.WriteString(tb.Head.Show(indent + "  "))
 		}
 	}
 
@@ -120,11 +121,11 @@ func (exc *exception) Repr(indent int) string {
 	if exc.reason == nil {
 		return "$ok"
 	}
-	return "[&reason=" + vals.Repr(exc.reason, indent+1) + "]"
+	return "[^exception &reason=" + vals.Repr(exc.reason, indent+1) + " &stack-trace=<...>]"
 }
 
 // Equal compares by address.
-func (exc *exception) Equal(rhs interface{}) bool {
+func (exc *exception) Equal(rhs any) bool {
 	return exc == rhs
 }
 
@@ -138,18 +139,20 @@ func (exc *exception) Bool() bool {
 	return exc.reason == nil
 }
 
-func (exc *exception) Fields() vals.StructMap { return excFields{exc} }
+func (exc *exception) Fields() vals.MethodMap { return excFields{exc} }
 
 type excFields struct{ e *exception }
 
-func (excFields) IsStructMap()    {}
-func (f excFields) Reason() error { return f.e.reason }
+func (f excFields) Reason() error           { return f.e.reason }
+func (f excFields) StackTrace() *StackTrace { return f.e.stackTrace }
 
 // PipelineError represents the errors of pipelines, in which multiple commands
 // may error.
 type PipelineError struct {
 	Errors []Exception
 }
+
+var _ vals.PseudoMap = PipelineError{}
 
 // Error returns a plain text representation of the pipeline error.
 func (pe PipelineError) Error() string {
@@ -200,11 +203,10 @@ func MakePipelineError(excs []Exception) error {
 	}
 }
 
-func (pe PipelineError) Fields() vals.StructMap { return peFields{pe} }
+func (pe PipelineError) Kind() string           { return "pipeline-error" }
+func (pe PipelineError) Fields() vals.MethodMap { return peFields{pe} }
 
 type peFields struct{ pe PipelineError }
-
-func (peFields) IsStructMap() {}
 
 func (f peFields) Type() string { return "pipeline" }
 
@@ -218,6 +220,8 @@ func (f peFields) Exceptions() vals.List {
 
 // Flow is a special type of error used for control flows.
 type Flow uint
+
+var _ vals.PseudoMap = Flow(0)
 
 // Control flows.
 const (
@@ -242,11 +246,10 @@ func (f Flow) Show(string) string {
 	return "\033[33;1m" + f.Error() + "\033[m"
 }
 
-func (f Flow) Fields() vals.StructMap { return flowFields{f} }
+func (f Flow) Kind() string           { return "flow-error" }
+func (f Flow) Fields() vals.MethodMap { return flowFields{f} }
 
 type flowFields struct{ f Flow }
-
-func (flowFields) IsStructMap() {}
 
 func (f flowFields) Type() string { return "flow" }
 func (f flowFields) Name() string { return f.f.Error() }
@@ -257,6 +260,8 @@ type ExternalCmdExit struct {
 	CmdName string
 	Pid     int
 }
+
+var _ vals.PseudoMap = ExternalCmdExit{}
 
 // NewExternalCmdExit constructs an error for representing a non-zero exit from
 // an external command.
@@ -291,7 +296,11 @@ func (exit ExternalCmdExit) Error() string {
 	}
 }
 
-func (exit ExternalCmdExit) Fields() vals.StructMap {
+func (exit ExternalCmdExit) Kind() string {
+	return "external-cmd-error"
+}
+
+func (exit ExternalCmdExit) Fields() vals.MethodMap {
 	ws := exit.WaitStatus
 	f := exitFieldsCommon{exit}
 	switch {
@@ -308,7 +317,6 @@ func (exit ExternalCmdExit) Fields() vals.StructMap {
 
 type exitFieldsCommon struct{ e ExternalCmdExit }
 
-func (exitFieldsCommon) IsStructMap()      {}
 func (f exitFieldsCommon) CmdName() string { return f.e.CmdName }
 func (f exitFieldsCommon) Pid() string     { return strconv.Itoa(f.e.Pid) }
 

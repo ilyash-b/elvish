@@ -5,9 +5,9 @@ import (
 	"testing"
 
 	"src.elv.sh/pkg/cli/lscolors"
-	"src.elv.sh/pkg/testutil"
-
 	"src.elv.sh/pkg/cli/term"
+	"src.elv.sh/pkg/must"
+	"src.elv.sh/pkg/testutil"
 	"src.elv.sh/pkg/ui"
 )
 
@@ -20,8 +20,8 @@ func TestNavigation(t *testing.T) {
 		filepath.Join("~", "d"), "> ",
 		"put", Styles,
 		"vvv", term.DotHere, "\n",
-		" NAVIGATING  \n", Styles,
-		"************ ",
+		" NAVIGATING            Ctrl-H hidden Ctrl-F filter\n", Styles,
+		"************           ++++++        ++++++       ",
 		" d      a                 \n", Styles,
 		"###### ++++++++++++++++++ ",
 		"        e                ", Styles,
@@ -41,8 +41,8 @@ func TestNavigation(t *testing.T) {
 		filepath.Join("~", "d"), "> ",
 		"put a", Styles,
 		"vvv ", term.DotHere, "\n",
-		" NAVIGATING  \n", Styles,
-		"************ ",
+		" NAVIGATING            Ctrl-H hidden Ctrl-F filter\n", Styles,
+		"************           ++++++        ++++++       ",
 		" d      a                 \n", Styles,
 		"###### ++++++++++++++++++ ",
 		"        e                ", Styles,
@@ -65,8 +65,8 @@ func TestNavigation_WidthRatio(t *testing.T) {
 	f.TTYCtrl.Inject(term.K('N', ui.Ctrl))
 	f.TestTTY(t,
 		filepath.Join("~", "d"), "> ", term.DotHere, "\n",
-		" NAVIGATING  \n", Styles,
-		"************ ",
+		" NAVIGATING            Ctrl-H hidden Ctrl-F filter\n", Styles,
+		"************           ++++++        ++++++       ",
 		" d                a               \n", Styles,
 		"################ ++++++++++++++++ ",
 		"                  e              ", Styles,
@@ -136,8 +136,8 @@ func TestNavigation_EnterDoesNothingInEmptyDir(t *testing.T) {
 		filepath.Join("~", "d", "e"), "> ",
 		"put", Styles,
 		"vvv", term.DotHere, "\n",
-		" NAVIGATING  \n", Styles,
-		"************ ",
+		" NAVIGATING            Ctrl-H hidden Ctrl-F filter\n", Styles,
+		"************           ++++++        ++++++       ",
 		" a                        \n", Styles,
 		"                          ",
 		" e    ", Styles,
@@ -176,6 +176,6 @@ func setupNav(c testutil.Cleanuper) *fixture {
 	f := setup(c)
 	lscolors.SetTestLsColors(c)
 	testutil.ApplyDir(testDir)
-	testutil.MustChdir("d")
+	must.Chdir("d")
 	return f
 }

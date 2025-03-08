@@ -1,5 +1,4 @@
-//go:build !windows && !plan9
-// +build !windows,!plan9
+//go:build unix
 
 // Copyright 2015 go-termios Author. All Rights Reserved.
 // https://github.com/go-termios/termios
@@ -8,7 +7,6 @@
 package sys
 
 import (
-	"fmt"
 	"os"
 
 	"golang.org/x/sys/unix"
@@ -20,7 +18,6 @@ func winSize(file *os.File) (row, col int) {
 	fd := int(file.Fd())
 	ws, err := unix.IoctlGetWinsize(fd, unix.TIOCGWINSZ)
 	if err != nil {
-		fmt.Printf("error in winSize: %v", err)
 		return -1, -1
 	}
 

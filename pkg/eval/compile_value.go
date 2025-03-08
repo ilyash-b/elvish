@@ -17,10 +17,13 @@ import (
 // An operation that produces values.
 type valuesOp interface {
 	diag.Ranger
-	exec(*Frame) ([]interface{}, Exception)
+	exec(*Frame) ([]any, Exception)
 }
 
 var outputCaptureBufferSize = 16
+
+// Can be mutated for testing.
+var getHome = fsutil.GetHome
 
 func (cp *compiler) compoundOp(n *parse.Compound) valuesOp {
 	if len(n.Indexings) == 0 {
@@ -44,12 +47,12 @@ func (cp *compiler) compoundOp(n *parse.Compound) valuesOp {
 
 type loneTildeOp struct{ diag.Ranging }
 
-func (op loneTildeOp) exec(fm *Frame) ([]interface{}, Exception) {
-	home, err := fsutil.GetHome("")
+func (op loneTildeOp) exec(fm *Frame) ([]any, Exception) {
+	home, err := getHome("")
 	if err != nil {
 		return nil, fm.errorp(op, err)
 	}
-	return []interface{}{home}, nil
+	return []any{home}, nil
 }
 
 func (cp *compiler) compoundOps(ns []*parse.Compound) []valuesOp {
@@ -66,7 +69,7 @@ type compoundOp struct {
 	subops []valuesOp
 }
 
-func (op compoundOp) exec(fm *Frame) ([]interface{}, Exception) {
+func (op compoundOp) exec(fm *Frame) ([]any, Exception) {
 	// Accumulator.
 	vs, exc := op.subops[0].exec(fm)
 	if exc != nil {
@@ -85,7 +88,7 @@ func (op compoundOp) exec(fm *Frame) ([]interface{}, Exception) {
 		}
 	}
 	if op.tilde {
-		newvs := make([]interface{}, len(vs))
+		newvs := make([]any, len(vs))
 		for i, v := range vs {
 			tilded, err := doTilde(v)
 			if err != nil {
@@ -103,10 +106,10 @@ func (op compoundOp) exec(fm *Frame) ([]interface{}, Exception) {
 		}
 	}
 	if hasGlob {
-		newvs := make([]interface{}, 0, len(vs))
+		newvs := make([]any, 0, len(vs))
 		for _, v := range vs {
 			if gp, ok := v.(globPattern); ok {
-				results, err := doGlob(gp, fm.Interrupts())
+				results, err := doGlob(fm.Context(), gp)
 				if err != nil {
 					return nil, fm.errorp(op, err)
 				}
@@ -120,8 +123,8 @@ func (op compoundOp) exec(fm *Frame) ([]interface{}, Exception) {
 	return vs, nil
 }
 
-func outerProduct(vs []interface{}, us []interface{}, f func(interface{}, interface{}) (interface{}, error)) ([]interface{}, error) {
-	ws := make([]interface{}, len(vs)*len(us))
+func outerProduct(vs []any, us []any, f func(any, any) (any, error)) ([]any, error) {
+	ws := make([]any, len(vs)*len(us))
 	nu := len(us)
 	for i, v := range vs {
 		for j, u := range us {
@@ -141,7 +144,7 @@ var (
 	ErrCannotDetermineUsername = errors.New("cannot determine user name from glob pattern")
 )
 
-func doTilde(v interface{}) (interface{}, error) {
+func doTilde(v any) (any, error) {
 	switch v := v.(type) {
 	case string:
 		s := v
@@ -154,7 +157,7 @@ func doTilde(v interface{}) (interface{}, error) {
 			uname = s[:i]
 			rest = s[i:]
 		}
-		dir, err := fsutil.GetHome(uname)
+		dir, err := getHome(uname)
 		if err != nil {
 			return nil, err
 		}
@@ -170,9 +173,9 @@ func doTilde(v interface{}) (interface{}, error) {
 			}
 			_, isSlash := v.Segments[1].(glob.Slash)
 			if isSlash {
-				// ~username or ~username/xxx. Replace the first segment with
-				// the home directory of the specified user.
-				dir, err := fsutil.GetHome(seg.Data)
+				// ~username/xxx. Replace the first segment with the home
+				// directory of the specified user.
+				dir, err := getHome(seg.Data)
 				if err != nil {
 					return nil, err
 				}
@@ -180,7 +183,7 @@ func doTilde(v interface{}) (interface{}, error) {
 				return v, nil
 			}
 		case glob.Slash:
-			dir, err := fsutil.GetHome("")
+			dir, err := getHome("")
 			if err != nil {
 				return nil, err
 			}
@@ -226,7 +229,7 @@ type indexingOp struct {
 	indexOps []valuesOp
 }
 
-func (op *indexingOp) exec(fm *Frame) ([]interface{}, Exception) {
+func (op *indexingOp) exec(fm *Frame) ([]any, Exception) {
 	vs, exc := op.headOp.exec(fm)
 	if exc != nil {
 		return nil, exc
@@ -236,7 +239,7 @@ func (op *indexingOp) exec(fm *Frame) ([]interface{}, Exception) {
 		if exc != nil {
 			return nil, exc
 		}
-		newvs := make([]interface{}, 0, len(vs)*len(indices))
+		newvs := make([]any, 0, len(vs)*len(indices))
 		for _, v := range vs {
 			for _, index := range indices {
 				result, err := vals.Index(v, index)
@@ -259,7 +262,12 @@ func (cp *compiler) primaryOp(n *parse.Primary) valuesOp {
 		sigil, qname := SplitSigil(n.Value)
 		ref := resolveVarRef(cp, qname, n)
 		if ref == nil {
-			cp.errorpf(n, "variable $%s not found", qname)
+			cp.autofixUnresolvedVar(qname)
+			// The variable name might be a prefix of a valid variable name.
+			// Ideally, we'd want to match the variable name to all possible
+			// names to check if that's actually the case, but it's a bit
+			// expensive and let's call this good enough for now.
+			cp.errorpfPartial(n, "variable $%s not found", parse.Quote(qname))
 		}
 		return &variableOp{n.Range(), sigil != "", qname, ref}
 	case parse.Wildcard:
@@ -267,7 +275,7 @@ func (cp *compiler) primaryOp(n *parse.Primary) valuesOp {
 		if err != nil {
 			cp.errorpf(n, "%s", err)
 		}
-		vs := []interface{}{
+		vs := []any{
 			globPattern{Pattern: glob.Pattern{Segments: []glob.Segment{seg}, DirOverride: ""},
 				Flags: 0, Buts: nil, TypeCb: nil}}
 		return literalValues(n, vs...)
@@ -307,17 +315,17 @@ type variableOp struct {
 	ref     *varRef
 }
 
-func (op variableOp) exec(fm *Frame) ([]interface{}, Exception) {
+func (op variableOp) exec(fm *Frame) ([]any, Exception) {
 	variable := deref(fm, op.ref)
 	if variable == nil {
-		return nil, fm.errorpf(op, "variable $%s not found", op.qname)
+		return nil, fm.errorpf(op, "variable $%s not found", parse.Quote(op.qname))
 	}
 	value := variable.Get()
 	if op.explode {
 		vs, err := vals.Collect(value)
 		return vs, fm.errorp(op, err)
 	}
-	return []interface{}{value}, nil
+	return []any{value}, nil
 }
 
 type listOp struct {
@@ -325,7 +333,7 @@ type listOp struct {
 	subops []valuesOp
 }
 
-func (op listOp) exec(fm *Frame) ([]interface{}, Exception) {
+func (op listOp) exec(fm *Frame) ([]any, Exception) {
 	list := vals.EmptyList
 	for _, subop := range op.subops {
 		moreValues, exc := subop.exec(fm)
@@ -336,7 +344,7 @@ func (op listOp) exec(fm *Frame) ([]interface{}, Exception) {
 			list = list.Conj(moreValue)
 		}
 	}
-	return []interface{}{list}, nil
+	return []any{list}, nil
 }
 
 type exceptionCaptureOp struct {
@@ -344,12 +352,12 @@ type exceptionCaptureOp struct {
 	subop effectOp
 }
 
-func (op exceptionCaptureOp) exec(fm *Frame) ([]interface{}, Exception) {
+func (op exceptionCaptureOp) exec(fm *Frame) ([]any, Exception) {
 	exc := op.subop.exec(fm)
 	if exc == nil {
-		return []interface{}{OK}, nil
+		return []any{OK}, nil
 	}
-	return []interface{}{exc}, nil
+	return []any{exc}, nil
 }
 
 type outputCaptureOp struct {
@@ -357,12 +365,12 @@ type outputCaptureOp struct {
 	subop effectOp
 }
 
-func (op outputCaptureOp) exec(fm *Frame) ([]interface{}, Exception) {
-	outPort, collect, err := CapturePort()
+func (op outputCaptureOp) exec(fm *Frame) ([]any, Exception) {
+	outPort, collect, err := ValueCapturePort()
 	if err != nil {
 		return nil, fm.errorp(op, err)
 	}
-	exc := op.subop.exec(fm.forkWithOutput("[output capture]", outPort))
+	exc := op.subop.exec(fm.forkWithOutput(outPort))
 	return collect(), exc
 }
 
@@ -377,6 +385,7 @@ func (cp *compiler) lambda(n *parse.Primary) valuesOp {
 	if len(n.Elements) > 0 {
 		// Argument list.
 		argNames = make([]string, len(n.Elements))
+		seenName := make(map[string]bool)
 		for i, arg := range n.Elements {
 			ref := stringLiteralOrError(cp, arg, "argument name")
 			sigil, qname := SplitSigil(ref)
@@ -385,13 +394,20 @@ func (cp *compiler) lambda(n *parse.Primary) valuesOp {
 				cp.errorpf(arg, "argument name must be unqualified")
 			}
 			if name == "" {
-				cp.errorpf(arg, "argument name must not be empty")
+				cp.errorpfPartial(arg, "argument name must not be empty")
 			}
 			if sigil == "@" {
 				if restArg != -1 {
-					cp.errorpf(arg, "only one argument may have @")
+					cp.errorpf(arg, "only one argument may have @ prefix")
 				}
 				restArg = i
+			}
+			if name != "_" {
+				if seenName[name] {
+					cp.errorpfPartial(arg, "duplicate argument name '%s'", name)
+				} else {
+					seenName[name] = true
+				}
 			}
 			argNames[i] = name
 		}
@@ -406,11 +422,11 @@ func (cp *compiler) lambda(n *parse.Primary) valuesOp {
 				cp.errorpf(opt.Key, "option name must be unqualified")
 			}
 			if name == "" {
-				cp.errorpf(opt.Key, "option name must not be empty")
+				cp.errorpfPartial(opt.Key, "option name must not be empty")
 			}
 			optNames[i] = name
 			if opt.Value == nil {
-				cp.errorpf(opt.Key, "option must have default value")
+				cp.errorpfPartial(opt.Key, "option must have default value")
 			} else {
 				optDefaultOps[i] = cp.compoundOp(opt.Value)
 			}
@@ -429,7 +445,7 @@ func (cp *compiler) lambda(n *parse.Primary) valuesOp {
 	newLocal := local.infos[scopeSizeInit:]
 	cp.popScope()
 
-	return &lambdaOp{n.Range(), argNames, restArg, optNames, optDefaultOps, newLocal, capture, chunkOp, cp.srcMeta}
+	return &lambdaOp{n.Range(), argNames, restArg, optNames, optDefaultOps, newLocal, capture, chunkOp, cp.src}
 }
 
 type lambdaOp struct {
@@ -444,7 +460,7 @@ type lambdaOp struct {
 	srcMeta       parse.Source
 }
 
-func (op *lambdaOp) exec(fm *Frame) ([]interface{}, Exception) {
+func (op *lambdaOp) exec(fm *Frame) ([]any, Exception) {
 	capture := &Ns{
 		make([]vars.Var, len(op.capture.infos)),
 		make([]staticVarInfo, len(op.capture.infos))}
@@ -457,7 +473,7 @@ func (op *lambdaOp) exec(fm *Frame) ([]interface{}, Exception) {
 			capture.infos[i] = fm.up.infos[info.index]
 		}
 	}
-	optDefaults := make([]interface{}, len(op.optDefaultOps))
+	optDefaults := make([]any, len(op.optDefaultOps))
 	for i, op := range op.optDefaultOps {
 		defaultValue, err := evalForValue(fm, op, "option default value")
 		if err != nil {
@@ -465,7 +481,7 @@ func (op *lambdaOp) exec(fm *Frame) ([]interface{}, Exception) {
 		}
 		optDefaults[i] = defaultValue
 	}
-	return []interface{}{&Closure{op.argNames, op.restArg, op.optNames, optDefaults, op.srcMeta, op.Range(), op.subop, op.newLocal, capture}}, nil
+	return []any{&Closure{op.argNames, op.restArg, op.optNames, optDefaults, op.srcMeta, op.Range(), op.subop, op.newLocal, capture}}, nil
 }
 
 type mapOp struct {
@@ -473,16 +489,16 @@ type mapOp struct {
 	pairsOp *mapPairsOp
 }
 
-func (op mapOp) exec(fm *Frame) ([]interface{}, Exception) {
+func (op mapOp) exec(fm *Frame) ([]any, Exception) {
 	m := vals.EmptyMap
-	exc := op.pairsOp.exec(fm, func(k, v interface{}) Exception {
+	exc := op.pairsOp.exec(fm, func(k, v any) Exception {
 		m = m.Assoc(k, v)
 		return nil
 	})
 	if exc != nil {
 		return nil, exc
 	}
-	return []interface{}{m}, nil
+	return []any{m}, nil
 }
 
 func (cp *compiler) mapPairs(pairs []*parse.MapPair) *mapPairsOp {
@@ -510,7 +526,7 @@ type mapPairsOp struct {
 	ends      []int
 }
 
-func (op *mapPairsOp) exec(fm *Frame, f func(k, v interface{}) Exception) Exception {
+func (op *mapPairsOp) exec(fm *Frame, f func(k, v any) Exception) Exception {
 	for i := range op.keysOps {
 		keys, exc := op.keysOps[i].exec(fm)
 		if exc != nil {
@@ -536,14 +552,14 @@ func (op *mapPairsOp) exec(fm *Frame, f func(k, v interface{}) Exception) Except
 
 type literalValuesOp struct {
 	diag.Ranging
-	values []interface{}
+	values []any
 }
 
-func (op literalValuesOp) exec(*Frame) ([]interface{}, Exception) {
+func (op literalValuesOp) exec(*Frame) ([]any, Exception) {
 	return op.values, nil
 }
 
-func literalValues(r diag.Ranger, vs ...interface{}) valuesOp {
+func literalValues(r diag.Ranger, vs ...any) valuesOp {
 	return literalValuesOp{r.Range(), vs}
 }
 
@@ -552,8 +568,8 @@ type seqValuesOp struct {
 	subops []valuesOp
 }
 
-func (op seqValuesOp) exec(fm *Frame) ([]interface{}, Exception) {
-	var values []interface{}
+func (op seqValuesOp) exec(fm *Frame) ([]any, Exception) {
+	var values []any
 	for _, subop := range op.subops {
 		moreValues, exc := subop.exec(fm)
 		if exc != nil {
@@ -566,9 +582,9 @@ func (op seqValuesOp) exec(fm *Frame) ([]interface{}, Exception) {
 
 type nopValuesOp struct{ diag.Ranging }
 
-func (nopValuesOp) exec(fm *Frame) ([]interface{}, Exception) { return nil, nil }
+func (nopValuesOp) exec(fm *Frame) ([]any, Exception) { return nil, nil }
 
-func evalForValue(fm *Frame, op valuesOp, what string) (interface{}, Exception) {
+func evalForValue(fm *Frame, op valuesOp, what string) (any, Exception) {
 	values, exc := op.exec(fm)
 	if exc != nil {
 		return nil, exc

@@ -76,20 +76,14 @@ func (f *Fixture) Stop() {
 
 // MakeBuffer is a helper for building a buffer. It is equivalent to
 // term.NewBufferBuilder(width of terminal).MarkLines(args...).Buffer().
-func (f *Fixture) MakeBuffer(args ...interface{}) *term.Buffer {
+func (f *Fixture) MakeBuffer(args ...any) *term.Buffer {
 	return term.NewBufferBuilder(f.width).MarkLines(args...).Buffer()
 }
 
 // TestTTY is equivalent to f.TTY.TestBuffer(f.MakeBuffer(args...)).
-func (f *Fixture) TestTTY(t *testing.T, args ...interface{}) {
+func (f *Fixture) TestTTY(t *testing.T, args ...any) {
 	t.Helper()
 	f.TTY.TestBuffer(t, f.MakeBuffer(args...))
-}
-
-// TestTTYNotes is equivalent to f.TTY.TestNotesBuffer(f.MakeBuffer(args...)).
-func (f *Fixture) TestTTYNotes(t *testing.T, args ...interface{}) {
-	t.Helper()
-	f.TTY.TestNotesBuffer(t, f.MakeBuffer(args...))
 }
 
 // StartReadCode starts the readCode function asynchronously, and returns two

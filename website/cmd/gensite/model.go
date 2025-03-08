@@ -1,6 +1,7 @@
 package main
 
 import (
+	"html/template"
 	"log"
 	"os"
 	"path/filepath"
@@ -24,11 +25,12 @@ type siteConf struct {
 	BaseCSS    []string
 }
 
-// categoryMeta represents the metadata of a cateogory, found in the global
+// categoryMeta represents the metadata of a category, found in the global
 // site configuration.
 type categoryMeta struct {
-	Name  string
-	Title string
+	Name    string
+	Title   string
+	NavHTML template.HTML
 }
 
 // categoryConf represents the configuration of a category. Note that the
@@ -106,8 +108,8 @@ func (ra *recentArticles) insert(a article) {
 	ra.articles[i] = a
 }
 
-// decodeFile decodes the named file in TOML into a pointer.
-func decodeTOML(fname string, v interface{}) {
+// decodeTOML decodes the named file in TOML into a pointer.
+func decodeTOML(fname string, v any) {
 	_, err := toml.DecodeFile(fname, v)
 	if err != nil {
 		log.Fatalln(err)

@@ -1,12 +1,12 @@
 package ui
 
 import (
-	"bytes"
 	"fmt"
 	"math/big"
 	"strings"
 
 	"src.elv.sh/pkg/eval/vals"
+	"src.elv.sh/pkg/parse"
 )
 
 // Segment is a string that has some style applied to it.
@@ -22,55 +22,54 @@ func (*Segment) Kind() string { return "ui:text-segment" }
 // construct an identical Segment. Unset or default attributes are skipped. If
 // the Segment represents an unstyled string only this string is returned.
 func (s *Segment) Repr(int) string {
-	buf := new(bytes.Buffer)
-	addIfNotEqual := func(key string, val, cmp interface{}) {
-		if val != cmp {
-			var valString string
-			if c, ok := val.(Color); ok {
-				valString = c.String()
-			} else {
-				valString = vals.Repr(val, 0)
-			}
-			fmt.Fprintf(buf, "&%s=%s ", key, valString)
+	var sb strings.Builder
+	addColor := func(key string, c Color) {
+		if c != nil {
+			fmt.Fprintf(&sb, " &%s=%s", key, c.String())
+		}
+	}
+	addBool := func(key string, b bool) {
+		if b {
+			fmt.Fprintf(&sb, " &%s", key)
 		}
 	}
 
-	addIfNotEqual("fg-color", s.Foreground, nil)
-	addIfNotEqual("bg-color", s.Background, nil)
-	addIfNotEqual("bold", s.Bold, false)
-	addIfNotEqual("dim", s.Dim, false)
-	addIfNotEqual("italic", s.Italic, false)
-	addIfNotEqual("underlined", s.Underlined, false)
-	addIfNotEqual("blink", s.Blink, false)
-	addIfNotEqual("inverse", s.Inverse, false)
+	addColor("fg-color", s.Fg)
+	addColor("bg-color", s.Bg)
+	addBool("bold", s.Bold)
+	addBool("dim", s.Dim)
+	addBool("italic", s.Italic)
+	addBool("underlined", s.Underlined)
+	addBool("blink", s.Blink)
+	addBool("inverse", s.Inverse)
 
-	if buf.Len() == 0 {
-		return s.Text
+	if sb.Len() == 0 {
+		return parse.Quote(s.Text)
 	}
 
-	return fmt.Sprintf("(ui:text-segment %s %s)", s.Text, strings.TrimSpace(buf.String()))
+	return fmt.Sprintf("(styled-segment %s%s)", parse.Quote(s.Text), sb.String())
 }
 
 // IterateKeys feeds the function with all valid attributes of styled-segment.
-func (*Segment) IterateKeys(fn func(v interface{}) bool) {
+func (*Segment) IterateKeys(fn func(v any) bool) {
 	vals.Feed(fn, "text", "fg-color", "bg-color", "bold", "dim", "italic", "underlined", "blink", "inverse")
 }
 
 // Index provides access to the attributes of a styled-segment.
-func (s *Segment) Index(k interface{}) (v interface{}, ok bool) {
+func (s *Segment) Index(k any) (v any, ok bool) {
 	switch k {
 	case "text":
 		v = s.Text
 	case "fg-color":
-		if s.Foreground == nil {
+		if s.Fg == nil {
 			return "default", true
 		}
-		return s.Foreground.String(), true
+		return s.Fg.String(), true
 	case "bg-color":
-		if s.Background == nil {
+		if s.Bg == nil {
 			return "default", true
 		}
-		return s.Background.String(), true
+		return s.Bg.String(), true
 	case "bold":
 		v = s.Bold
 	case "dim":
@@ -90,7 +89,7 @@ func (s *Segment) Index(k interface{}) (v interface{}, ok bool) {
 
 // Concat implements Segment+string, Segment+float64, Segment+Segment and
 // Segment+Text.
-func (s *Segment) Concat(v interface{}) (interface{}, error) {
+func (s *Segment) Concat(v any) (any, error) {
 	switch rhs := v.(type) {
 	case string:
 		return Text{s, &Segment{Text: rhs}}, nil
@@ -105,7 +104,7 @@ func (s *Segment) Concat(v interface{}) (interface{}, error) {
 }
 
 // RConcat implements string+Segment and float64+Segment.
-func (s *Segment) RConcat(v interface{}) (interface{}, error) {
+func (s *Segment) RConcat(v any) (any, error) {
 	switch lhs := v.(type) {
 	case string:
 		return Text{&Segment{Text: lhs}, s}, nil
@@ -144,11 +143,12 @@ func (s *Segment) String() string {
 	return s.VTString()
 }
 
-// VTString renders the styled segment using VT-style escape sequences.
+// VTString renders the styled segment using VT-style escape sequences. Any
+// existing SGR state will be cleared.
 func (s *Segment) VTString() string {
 	sgr := s.SGR()
 	if sgr == "" {
-		return s.Text
+		return "\033[m" + s.Text
 	}
-	return fmt.Sprintf("\033[%sm%s\033[m", sgr, s.Text)
+	return fmt.Sprintf("\033[;%sm%s\033[m", sgr, s.Text)
 }

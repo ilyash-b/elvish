@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func a(c ...interface{}) ast {
+func a(c ...any) ast {
 	// Shorthand used for checking Compound and levels beneath.
 	return ast{"Chunk/Pipeline/Form", fs{"Head": "a", "Args": c}}
 }
@@ -71,21 +71,6 @@ var testCases = []struct {
 		want: ast{"Form", fs{
 			"Head": "ls",
 			"Args": []string{"x", "y"}}},
-	},
-	{
-		name: "assignment form",
-		code: "k=v k[a][b]=v {a,b[1]}=(ha)",
-		node: &Form{},
-		want: ast{"Form", fs{
-			"Assignments": []string{"k=v", "k[a][b]=v", "{a,b[1]}=(ha)"}}},
-	},
-	{
-		name: "temporary assignment",
-		code: "k=v k[a][b]=v a",
-		node: &Form{},
-		want: ast{"Form", fs{
-			"Assignments": []string{"k=v", "k[a][b]=v"},
-			"Head":        "a"}},
 	},
 	{
 		name: "redirection",
@@ -196,6 +181,13 @@ var testCases = []struct {
 		node: &Indexing{},
 		want: ast{"Indexing", fs{
 			"Head": "$b", "Indices": []string{"c", "d", "\ne\n"}}},
+	},
+	{
+		name: "indexing expression with empty index",
+		code: "$a[]",
+		node: &Indexing{},
+		want: ast{"Indexing", fs{
+			"Head": "$a", "Indices": []string{""}}},
 	},
 
 	// Primary
@@ -659,7 +651,7 @@ func TestParse(t *testing.T) {
 					t.Errorf("Parse(%q) returns no error, want error with %q",
 						test.code, test.wantErrMsg)
 				}
-				parseError := err.(*Error).Entries[0]
+				parseError := UnpackErrors(err)[0]
 				r := parseError.Context
 
 				if errPart := test.code[r.From:r.To]; errPart != test.wantErrPart {
@@ -684,5 +676,13 @@ func TestParse_ReturnsTreeContainingSourceFromArgument(t *testing.T) {
 	tree, _ := Parse(src, Config{})
 	if tree.Source != src {
 		t.Errorf("tree.Source = %v, want %v", tree.Source, src)
+	}
+}
+
+func BenchmarkParse(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		for _, test := range testCases {
+			_ = ParseAs(SourceForTest(test.code), test.node, Config{})
+		}
 	}
 }

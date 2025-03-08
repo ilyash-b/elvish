@@ -21,9 +21,10 @@ _testmain.go
 
 *.exe
 
-/.vscode/
-
+# Nix
+/result
 # Project specific
 cover
-/_bin/
+/_*
 /elvish
+/branding/*.png

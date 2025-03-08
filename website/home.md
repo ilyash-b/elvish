@@ -1,161 +1,178 @@
-**Elvish** is an expressive programming language and a versatile interactive
-shell, combined into one seamless package. It runs on Linux, BSDs, macOS and
-Windows.
+<div class="intro">
+<div class="intro-content">
 
-<div class="no-js">
-  <h1>Demos</h1>
-  <p>
-    Enable JavaScript to see demos as slides.
-  </p>
-</div>
+**Elvish** (*noun*):
 
-<ul id="demo-switcher">
-</ul>
+1.  A powerful scripting language.
 
-<div id="demo-window"> <div id="demo-container">
-  <div class="demo-wrapper"> <div class="demo">
-    <div class="demo-col demo-description">
-      <h2>Powerful Pipelines</h2>
-      <p>
-        Text pipelines are intuitive and powerful. However, if your data have
-        inherently complex structures, processing them with the pipeline
-        often requires a lot of ad-hoc, hard-to-maintain text processing code.
-      </p>
-      <p>
-        Pipelines in Elvish can carry structured data, not just text. You can
-        stream lists, maps and even functions through the pipeline.
-      </p>
-    </div>
-    <div class="demo-col demo-ttyshot">
-      @ttyshot pipelines
-    </div>
-  </div> </div>
+2.  A shell with useful interactive features built-in.
 
-  <div class="demo-wrapper"> <div class="demo">
-    <div class="demo-col demo-description">
-      <h2>Intuitive Control Structures</h2>
-      <p>
-        If you know programming, you probably already know how
-        <code>if</code> looks in C. So why learn another syntax?
-      </p>
-      <p>
-        Elvish comes with a standard set of control structures: conditional
-        control with <code>if</code>, loops with <code>for</code> and
-        <code>while</code>, and exception handling with <code>try</code>. All
-        of them have a familiar C-like syntax.
-      </p>
-    </div>
-    <div class="demo-col demo-ttyshot">
-      @ttyshot control-structures
-    </div>
-  </div> </div>
-
-  <div class="demo-wrapper"> <div class="demo">
-    <div class="demo-col demo-description">
-      <h2>Directory History</h2>
-      <p>
-        Do you type far too many <code>cd</code> commands? Do you struggle to
-        remember which <code>deeply/nested/directory</code> your source codes,
-        logs and configuration files are?
-      </p>
-      <p>
-        Backed by a real database, Elvish remembers all the directories you
-        have been to, all the time. Just press <span class="key">Ctrl-L</span>
-        and search, as you do in a browser.
-      </p>
-    </div>
-    <div class="demo-col demo-ttyshot">
-      @ttyshot location-mode
-    </div>
-  </div> </div>
-
-  <div class="demo-wrapper"> <div class="demo">
-    <div class="demo-col demo-description">
-      <h2>Command History</h2>
-      <p>
-        Want to find the magical <code>ffmpeg</code> command that you used to
-        transcode a video file two months ago, but it is buried under a
-        million other commands?
-      </p>
-      <p>
-        No more cycling through history one command at a time.
-        Press <span class="key">Ctrl-R</span> and start searching your entire
-        command history.
-      </p>
-    </div>
-    <div class="demo-col demo-ttyshot">
-      @ttyshot histlist-mode
-    </div>
-  </div> </div>
-
-  <div class="demo-wrapper"> <div class="demo">
-    <div class="demo-col demo-description">
-      <h2>Built-in File Manager</h2>
-      <p>
-        Want the convenience of a file manager, but can't give up the power of
-        a shell?
-      </p>
-      <p>
-        You no longer have to make a choice. Press <span
-        class="key">Ctrl-N</span> to start exploring directories and
-        preview files, with the full power of a shell still under your
-        fingertip.
-      </p>
-    </div>
-    <div class="demo-col demo-ttyshot">
-      @ttyshot navigation-mode
-    </div>
-  </div> </div>
-</div> </div>
-
-<div id="columns">
-
-<div class="column">
-
-# <i class="icon-rocket"></i> Run Elvish
-
--   [Download](get/) a binary
-
--   [Source code](https://github.com/elves/elvish) on GitHub
-
--   [Try Elvish](https://try.elv.sh) directly from the browser (Beta)
-
-# <i class="icon-sitemap"></i> Use this Site
-
-Start your Elvish journey in this very website!
-
--   [Learn](learn/) the fundamentals and interesting topics
-
--   Peruse the definitive [reference](ref/) documents
-
--   Read the [blog](blog/) for news, tips, and developers' musings
-
--   Subscribe to the [feed](feed.atom) to keep updated
+3.  A statically linked binary for Linux, BSDs, macOS or Windows.
 
 </div>
+<div class="action">
+  <a href="get/" class="primary button">Download</a>
+  <a href="learn/" class="button">Learn</a>
+  <a href="https://github.com/elves/elvish" class="button" target="_blank">GitHub</a>
+  <a href="#community" class="community button">Community</a>
+  <a href="sponsor/" class="sponsor button">Sponsor</a>
+</div>
+</div>
 
+<section>
+<header>
+
+Powerful modern shell scripting
+
+</header>
+<div class="showcase content">
+
+Write readable and maintainable scripts - no cryptic operators, no
+double-quoting every variable.
+
+```elvish jpg-to-png.elv [(explainer)](learn/scripting-case-studies.html#jpg-to-png.elv)
+for x [*.jpg] {
+  gm convert $x (str:trim-suffix $x .jpg).png
+}
+```
+
+Power up your workflows with data structures and functional programming.
+
+```elvish update-servers-in-parallel.elv [(explainer)](learn/scripting-case-studies.html#update-servers-in-parallel.elv)
+var hosts = [[&name=a &cmd='apt update']
+             [&name=b &cmd='pacman -Syu']]
+# peach = "parallel each"
+peach {|h| ssh root@$h[name] $h[cmd] } $hosts
+```
+
+Catch errors before code executes.
+
+```elvish-transcript Terminal: elvish [(explainer)](learn/scripting-case-studies.html#catching-errors-early)
+~> var project = ~/project
+~> rm -rf $projetc/bin
+compilation error: variable $projetc not found
+```
+
+Command failures abort execution by default. No more silent failures, no more
+`&&` everywhere.
+
+```elvish-transcript Terminal: elvish [(explainer)](learn/scripting-case-studies.html#command-failures)
+~> gm convert a.jpg a.png; rm a.jpg
+gm convert: Failed to convert a.jpg
+Exception: gm exited with 1
+  [tty 1]:1:1-22: gm convert a.jpg a.png; rm a.jpg
+# "rm a.jpg" is NOT executed
+```
+
+</div>
+</section>
+<section>
+<header>
+
+Run it anywhere
+
+</header>
+<div class="showcase content">
+
+Elvish comes in a single statically linked binary for your laptop, your server,
+your PC, or your Raspberry Pi.
+
+```elvish-transcript Terminal: Raspberry Pi
+~> wget dl.elv.sh/linux-arm64/elvish-HEAD.tar.gz
+~> tar -C /usr/local/bin -xvf elvish-HEAD.tar.gz
+elvish
+~> elvish
+```
+
+Use Elvish in your CI/CD pipelines. Convenient shell syntax and modern
+programming language - why not both?
+
+```yaml github-actions.yaml
+steps:
+  - uses: elves/setup-elvish@v1
+    with:
+      elvish-version: HEAD
+  - name: Run something with Elvish
+    shell: elvish {0}
+    run: |
+      echo Running Elvish $version
+```
+
+</div>
+</section>
+<section>
+<header>
+
+Interactive shell with batteries included
+
+</header>
+<div class="showcase content">
+
+Press <kbd>Ctrl-L</kbd> for directory history, and let Elvish find
+`java/com/acme/project` for you.
+
+```ttyshot Terminal: elvish - directory history [(more)](learn/tour.html#directory-history)
+home/dir-history
+```
+
+Press <kbd>Ctrl-R</kbd> for command history. That beautiful `ffmpeg` command you
+crafted two months ago is still there.
+
+```ttyshot Terminal: elvish - command history [(more)](learn/tour.html#command-history)
+home/cmd-history
+```
+
+Press <kbd>Ctrl-N</kbd> for the builtin file manager. Explore directories and
+files without leaving the comfort of your shell.
+
+```ttyshot Terminal: elvish - file manager [(more)](learn/tour.html#navigation-mode)
+home/file-manager
+```
+
+</div>
+</section>
+<section>
+<div class="columns content">
 <div class="column">
+<header id="community">
 
-# <i class="icon-chat"></i> Join the Community
+Talk with the community
 
-Join any of the following channels -- they are all all bridged together thanks
-to [Matrix](https://matrix.org)!
+</header>
 
--   Telegram: [@elvish](https://telegram.me/elvish)
+-   Join the [Forum](https://bbs.elv.sh) to ask questions, share your
+    experience, and show off your projects!
 
--   IRC: [#elvish](https://web.libera.chat/#elvish) on Libera Chat
+-   Join the chatroom to talk to fellow users in real time! The following
+    channels are all bridged together thanks to [Matrix](https://matrix.org):
 
--   Gitter: [elves/elvish](https://gitter.im/elves/elvish)
+    -   Telegram: [Elvish user group](https://t.me/+Pv5ZYgTXD-YaKwcP)
 
--   Matrix: [#users:elv.sh](https://matrix.to/#/#users:elv.sh)
+    -   Discord: [Elvish Shell](https://discord.gg/jrmuzRBU8D)
 
-# <i class="icon-link-ext"></i> More Resources
+    -   Matrix: [#users:elv.sh](https://matrix.to/#/#users:elv.sh)
+
+    -   IRC: [#elvish](https://web.libera.chat/#elvish) on Libera Chat
+
+    -   Gitter: [elves/elvish](https://gitter.im/elves/elvish)
+
+</div>
+<div class="column">
+<header>
+
+More resources
+
+</header>
+
+-   [Try Elvish](https://try.elv.sh) directly from the browser (beta)
 
 -   [Awesome Elvish](https://github.com/elves/awesome-elvish): Official list of
     unofficial Elvish modules
 
 -   [@ElvishShell](https://twitter.com/elvishshell) on Twitter
 
-</div>
+-   [Elvish TV](https://www.youtube.com/@ElvishShell) on YouTube
 
 </div>
+</div>
+</section>

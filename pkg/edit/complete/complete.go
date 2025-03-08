@@ -7,14 +7,10 @@ import (
 
 	"src.elv.sh/pkg/cli/modes"
 	"src.elv.sh/pkg/diag"
+	"src.elv.sh/pkg/eval"
 	"src.elv.sh/pkg/parse"
-	"src.elv.sh/pkg/parse/parseutil"
+	"src.elv.sh/pkg/parse/np"
 )
-
-type item = modes.CompletionItem
-
-// An error returned by Complete if the config has not supplied a PureEvaler.
-var errNoPureEvaler = errors.New("no PureEvaler supplied")
 
 // An error returned by Complete as well as the completers if there is no
 // applicable completion.
@@ -22,13 +18,10 @@ var errNoCompletion = errors.New("no completion")
 
 // Config stores the configuration required for code completion.
 type Config struct {
-	// An interface to access the runtime. Complete will return an error if this
-	// is nil.
-	PureEvaler PureEvaler
 	// A function for filtering raw candidates. If nil, no filtering is done.
 	Filterer Filterer
 	// Used to generate candidates for a command argument. Defaults to
-	// Filenames.
+	// GenerateFileNames.
 	ArgGenerator ArgGenerator
 }
 
@@ -53,18 +46,6 @@ type RawItem interface {
 	Cook(parse.PrimaryType) modes.CompletionItem
 }
 
-// PureEvaler encapsulates the functionality the completion algorithm needs from
-// the language runtime.
-type PureEvaler interface {
-	EachExternal(func(cmd string))
-	EachSpecial(func(special string))
-	EachNs(func(string))
-	EachVariableInNs(string, func(string))
-	PurelyEvalPrimary(pn *parse.Primary) interface{}
-	PurelyEvalCompound(*parse.Compound) (string, bool)
-	PurelyEvalPartialCompound(*parse.Compound, int) (string, bool)
-}
-
 // CodeBuffer is the same the type in src.elv.sh/pkg/el/codearea,
 // replicated here to avoid an unnecessary dependency.
 type CodeBuffer struct {
@@ -74,10 +55,7 @@ type CodeBuffer struct {
 
 // Complete runs the code completion algorithm in the given context, and returns
 // the completion type, items and any error encountered.
-func Complete(code CodeBuffer, cfg Config) (*Result, error) {
-	if cfg.PureEvaler == nil {
-		return nil, errNoPureEvaler
-	}
+func Complete(code CodeBuffer, ev *eval.Evaler, cfg Config) (*Result, error) {
 	if cfg.Filterer == nil {
 		cfg.Filterer = FilterPrefix
 	}
@@ -87,9 +65,13 @@ func Complete(code CodeBuffer, cfg Config) (*Result, error) {
 
 	// Ignore the error; the function always returns a valid *ChunkNode.
 	tree, _ := parse.Parse(parse.Source{Name: "[interactive]", Code: code.Content}, parse.Config{})
-	leaf := parseutil.FindLeafNode(tree.Root, code.Dot)
+	path := np.FindLeft(tree.Root, code.Dot)
+	if len(path) == 0 {
+		// This can happen when there is a parse error.
+		return nil, errNoCompletion
+	}
 	for _, completer := range completers {
-		ctx, rawItems, err := completer(leaf, cfg)
+		ctx, rawItems, err := completer(path, ev, cfg)
 		if err == errNoCompletion {
 			continue
 		}

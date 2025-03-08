@@ -1,5 +1,4 @@
-//go:build !windows && !plan9
-// +build !windows,!plan9
+//go:build unix
 
 package eval
 
@@ -15,7 +14,7 @@ import (
 // Process control functions in Unix.
 
 func putSelfInFg() error {
-	if !sys.IsATTY(os.Stdin) {
+	if !sys.IsATTY(os.Stdin.Fd()) {
 		return nil
 	}
 	// If Elvish is in the background, the tcsetpgrp call below will either fail

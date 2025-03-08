@@ -5,9 +5,11 @@ import (
 	"math"
 	"math/big"
 	"reflect"
+	"sort"
 	"strconv"
 
 	"src.elv.sh/pkg/parse"
+	"src.elv.sh/pkg/persistent/hashmap"
 )
 
 // Reprer wraps the Repr method.
@@ -25,19 +27,18 @@ type Reprer interface {
 }
 
 // ReprPlain is like Repr, but without pretty-printing.
-func ReprPlain(v interface{}) string {
-	// TODO: Change to math.MinInt when Go 1.17 is required.
-	return Repr(v, math.MinInt32)
+func ReprPlain(v any) string {
+	return Repr(v, math.MinInt)
 }
 
 // Repr returns the representation for a value, a string that is preferably
 // (but not necessarily) an Elvish expression that evaluates to the argument.
 // The representation is pretty-printed, using indent as the initial level of
 // indentation. It is implemented for the builtin types nil, bool and string,
-// the File, List and Map types, StructMap types, and types satisfying the
+// the File, List and Map types, field map types, and types satisfying the
 // Reprer interface. For other types, it uses fmt.Sprint with the format
 // "<unknown %v>".
-func Repr(v interface{}, indent int) string {
+func Repr(v any, indent int) string {
 	switch v := v.(type) {
 	case nil:
 		return "$nil"
@@ -56,8 +57,6 @@ func Repr(v interface{}, indent int) string {
 		return "(num " + v.String() + ")"
 	case float64:
 		return "(num " + formatFloat64(v) + ")"
-	case Reprer:
-		return v.Repr(indent)
 	case File:
 		return fmt.Sprintf("<file{%s %d}>", parse.Quote(v.Name()), v.Fd())
 	case List:
@@ -67,29 +66,65 @@ func Repr(v interface{}, indent int) string {
 		}
 		return b.String()
 	case Map:
-		builder := NewMapReprBuilder(indent)
-		for it := v.Iterator(); it.HasElem(); it.Next() {
-			k, v := it.Elem()
-			builder.WritePair(Repr(k, indent+1), indent+2, Repr(v, indent+2))
-		}
-		return builder.String()
-	case StructMap:
-		return reprStructMap(v, indent)
-	case PseudoStructMap:
-		return reprStructMap(v.Fields(), indent)
+		return reprMap(v.Iterator(), v.Len(), indent)
+	case Reprer:
+		return v.Repr(indent)
+	case PseudoMap:
+		f := v.Fields()
+		fValue := reflect.ValueOf(v.Fields())
+		s := reprFieldOrMethodMap(FieldMapKeys(getMethodMapKeys(f)),
+			func(i int) any { return fValue.Method(i).Call(nil)[0].Interface() }, indent)
+		// Add a tag immediately after [.
+		return "[^" + Kind(v) + " " + s[1:]
 	default:
+		if keys := GetFieldMapKeys(v); keys != nil {
+			value := reflect.ValueOf(v)
+			return reprFieldOrMethodMap(keys,
+				func(i int) any { return value.Field(i).Interface() }, indent)
+		}
 		return fmt.Sprintf("<unknown %v>", v)
 	}
 }
 
-func reprStructMap(v StructMap, indent int) string {
-	vValue := reflect.ValueOf(v)
-	vType := vValue.Type()
+func reprMap(it hashmap.Iterator, n, indent int) string {
 	builder := NewMapReprBuilder(indent)
-	it := iterateStructMap(vType)
-	for it.Next() {
-		k, v := it.Get(vValue)
+	// Collect all the key-value pairs.
+	pairs := make([][2]any, 0, n)
+	for ; it.HasElem(); it.Next() {
+		k, v := it.Elem()
+		pairs = append(pairs, [2]any{k, v})
+	}
+	// Sort the pairs. See the godoc of CmpTotal for the sorting algorithm.
+	sort.Slice(pairs, func(i, j int) bool {
+		return CmpTotal(pairs[i][0], pairs[j][0]) == CmpLess
+	})
+	// Print the pairs.
+	for _, pair := range pairs {
+		k, v := pair[0], pair[1]
 		builder.WritePair(Repr(k, indent+1), indent+2, Repr(v, indent+2))
+	}
+	return builder.String()
+}
+
+type fieldMapPair struct {
+	key   string
+	value any
+}
+
+func reprFieldOrMethodMap(keys FieldMapKeys, value func(i int) any, indent int) string {
+	builder := NewMapReprBuilder(indent)
+	// Collect all the key-value pairs.
+	pairs := make([]fieldMapPair, len(keys))
+	for i, key := range keys {
+		pairs[i] = fieldMapPair{key, value(i)}
+	}
+	// Sort the pairs.
+	sort.Slice(pairs, func(i, j int) bool {
+		return pairs[i].key < pairs[j].key
+	})
+	// Print the pairs.
+	for _, pair := range pairs {
+		builder.WritePair(Repr(pair.key, indent+1), indent+2, Repr(pair.value, indent+2))
 	}
 	return builder.String()
 }

@@ -37,11 +37,11 @@ import (
 // Num is a stand-in type for int, *big.Int, *big.Rat or float64. This type
 // doesn't offer type safety, but is useful as a marker; for example, it is
 // respected when parsing function arguments.
-type Num interface{}
+type Num any
 
 // NumSlice is a stand-in type for []int, []*big.Int, []*big.Rat or []float64.
 // This type doesn't offer type safety, but is useful as a marker.
-type NumSlice interface{}
+type NumSlice any
 
 // ParseNum parses a string into a suitable number type. If the string does not
 // represent a valid number, it returns nil.
@@ -250,4 +250,22 @@ func getInt(z *big.Int) (int, bool) {
 		}
 	}
 	return -1, false
+}
+
+// Int64ToNum converts an int64 to a Num with a suitable underlying
+// representation.
+func Int64ToNum(i64 int64) Num {
+	if i := int(i64); int64(i) == i64 {
+		return i
+	}
+	return big.NewInt(i64)
+}
+
+// Uint64ToNum converts a uint64 to a Num with a suitable underlying
+// representation.
+func Uint64ToNum(u64 uint64) Num {
+	if i := int(u64); i >= 0 && uint64(i) == u64 {
+		return i
+	}
+	return new(big.Int).SetUint64(u64)
 }

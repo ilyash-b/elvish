@@ -1,74 +1,19 @@
 package eval_test
 
 import (
-	"strconv"
 	"sync"
-	"syscall"
 	"testing"
 
 	. "src.elv.sh/pkg/eval"
-	"src.elv.sh/pkg/prog/progtest"
 
-	. "src.elv.sh/pkg/eval/evaltest"
-	"src.elv.sh/pkg/eval/vals"
 	"src.elv.sh/pkg/eval/vars"
 	"src.elv.sh/pkg/parse"
-	"src.elv.sh/pkg/testutil"
 )
-
-func TestPid(t *testing.T) {
-	pid := strconv.Itoa(syscall.Getpid())
-	Test(t, That("put $pid").Puts(pid))
-}
-
-func TestNumBgJobs(t *testing.T) {
-	Test(t,
-		That("put $num-bg-jobs").Puts("0"),
-		// TODO(xiaq): Test cases where $num-bg-jobs > 0. This cannot be done
-		// with { put $num-bg-jobs }& because the output channel may have
-		// already been closed when the closure is run.
-	)
-}
-
-func TestArgs(t *testing.T) {
-	Test(t,
-		That("put $args").Puts(vals.EmptyList))
-	TestWithSetup(t,
-		func(ev *Evaler) { ev.SetArgs([]string{"foo", "bar"}) },
-		That("put $args").Puts(vals.MakeList("foo", "bar")))
-}
-
-func TestEvalTimeDeprecate(t *testing.T) {
-	progtest.SetDeprecationLevel(t, 42)
-	testutil.InTempDir(t)
-
-	TestWithSetup(t, func(ev *Evaler) {
-		ev.ExtendGlobal(BuildNs().AddGoFn("dep", func(fm *Frame) {
-			fm.Deprecate("deprecated", nil, 42)
-		}))
-	},
-		That("dep").PrintsStderrWith("deprecated"),
-		// Deprecation message is only shown once.
-		That("dep 2> tmp.txt; dep").DoesNothing(),
-	)
-}
-
-func TestMultipleEval(t *testing.T) {
-	Test(t,
-		That("var x = hello").Then("put $x").Puts("hello"),
-
-		// Shadowing with fn. Regression test for #1213.
-		That("fn f { put old }").Then("fn f { put new }").Then("f").
-			Puts("new"),
-		// Variable deletion. Regression test for #1213.
-		That("var x = foo").Then("del x").Then("put $x").DoesNotCompile(),
-	)
-}
 
 func TestEval_AlternativeGlobal(t *testing.T) {
 	ev := NewEvaler()
 	g := BuildNs().AddVar("a", vars.NewReadOnly("")).Ns()
-	err := ev.Eval(parse.Source{Code: "nop $a"}, EvalCfg{Global: g})
+	err := ev.Eval(parse.Source{Name: "[test]", Code: "nop $a"}, EvalCfg{Global: g})
 	if err != nil {
 		t.Errorf("got error %v, want nil", err)
 	}
@@ -84,11 +29,11 @@ func TestEval_Concurrent(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
-		ev.Eval(parse.Source{Code: "var a"}, EvalCfg{})
+		ev.Eval(parse.Source{Name: "[test]", Code: "var a"}, EvalCfg{})
 		wg.Done()
 	}()
 	go func() {
-		ev.Eval(parse.Source{Code: "var b"}, EvalCfg{})
+		ev.Eval(parse.Source{Name: "[test]", Code: "var b"}, EvalCfg{})
 		wg.Done()
 	}()
 	wg.Wait()
@@ -117,8 +62,8 @@ func TestCall(t *testing.T) {
 	passedOpt := "opt value"
 	ev.Call(fn,
 		CallCfg{
-			Args: []interface{}{passedArg},
-			Opts: map[string]interface{}{"opt": passedOpt},
+			Args: []any{passedArg},
+			Opts: map[string]any{"opt": passedOpt},
 			From: "[TestCall]"},
 		EvalCfg{})
 
@@ -149,7 +94,7 @@ func TestCheck(t *testing.T) {
 	ev := NewEvaler()
 	for _, test := range checkTests {
 		t.Run(test.name, func(t *testing.T) {
-			parseErr, compileErr := ev.Check(parse.Source{Code: test.code}, nil)
+			parseErr, _, compileErr := ev.Check(parse.Source{Name: "[test]", Code: test.code}, nil)
 			if (parseErr != nil) != test.wantParseErr {
 				t.Errorf("got parse error %v, when wantParseErr = %v",
 					parseErr, test.wantParseErr)

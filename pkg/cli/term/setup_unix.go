@@ -1,5 +1,4 @@
-//go:build !windows && !plan9
-// +build !windows,!plan9
+//go:build unix
 
 package term
 
@@ -8,11 +7,32 @@ import (
 	"os"
 
 	"golang.org/x/sys/unix"
-	"src.elv.sh/pkg/diag"
+	"src.elv.sh/pkg/errutil"
 	"src.elv.sh/pkg/sys/eunix"
 )
 
-func setup(in, out *os.File) (func() error, error) {
+func setupForTUIOnce(in, _ *os.File) func() {
+	fd := int(in.Fd())
+	term, err := eunix.TermiosForFd(fd)
+	if err != nil {
+		return func() {}
+	}
+	savedTermios := term.Copy()
+
+	// Turning off IXON frees up Ctrl-Q and Ctrl-S for keybindings, but it's not
+	// actually necessary for Elvish to function.
+	//
+	// We do this in SetupForTUIOnce rather than SetupForTUI so that the user
+	// can still use "stty ixon" to turn it on if they wish.
+	//
+	// Other "nice to have" terminal setups should go here as well.
+	term.SetIXON(false)
+	term.ApplyToFd(fd)
+
+	return func() { savedTermios.ApplyToFd(fd) }
+}
+
+func setupForTUI(in, out *os.File) (func() error, error) {
 	// On Unix, use input file for changing termios. All fds pointing to the
 	// same terminal are equivalent.
 
@@ -46,14 +66,16 @@ func setup(in, out *os.File) (func() error, error) {
 	}
 
 	restore := func() error {
-		return diag.Errors(savedTermios.ApplyToFd(fd), restoreVT(out))
+		return errutil.Multi(savedTermios.ApplyToFd(fd), restoreVT(out))
 	}
 
 	return restore, errSetupVT
 }
 
-func setupGlobal() func() {
-	return func() {}
+func setupForEval(in, out *os.File) func() {
+	// There is nothing to set up on Unix, but we try to sanitize the terminal
+	// when evaluation finishes.
+	return func() { sanitize(in, out) }
 }
 
 func sanitize(in, out *os.File) {

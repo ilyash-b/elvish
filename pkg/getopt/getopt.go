@@ -8,16 +8,16 @@
 // the flag package in the standard library instead.
 package getopt
 
-//go:generate stringer -type=Config,Arity,ContextType -output=string.go
+//go:generate stringer -type=Config,Arity,ContextType -output=zstring.go
 
 import (
 	"fmt"
 	"strings"
 
-	"src.elv.sh/pkg/diag"
+	"src.elv.sh/pkg/errutil"
 )
 
-// Config configurates the parsing behavior.
+// Config configures the parsing behavior.
 type Config uint
 
 const (
@@ -121,7 +121,7 @@ func Parse(args []string, specs []*OptionSpec, cfg Config) ([]*Option, []string,
 	}
 	for _, opt := range opts {
 		if opt.Unknown {
-			err = diag.Errors(err, fmt.Errorf("unknown option %s", optionPart(opt)))
+			err = errutil.Multi(err, fmt.Errorf("unknown option %s", optionPart(opt)))
 		}
 	}
 	return opts, nonOptArgs, err

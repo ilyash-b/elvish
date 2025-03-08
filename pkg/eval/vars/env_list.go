@@ -9,7 +9,7 @@ import (
 	"strings"
 	"sync"
 
-	"src.elv.sh/pkg/diag"
+	"src.elv.sh/pkg/errutil"
 	"src.elv.sh/pkg/eval/vals"
 )
 
@@ -21,7 +21,7 @@ var (
 // Errors
 var (
 	ErrPathMustBeString          = errors.New("path must be string")
-	ErrPathContainsForbiddenChar = errors.New("path cannot contain NUL byte, colon on UNIX or semicolon on Windows")
+	ErrPathContainsForbiddenChar = errors.New("path cannot contain NUL byte, colon on Unix or semicolon on Windows")
 )
 
 // NewEnvListVar returns a variable whose value is a list synchronized with an
@@ -38,11 +38,11 @@ type envListVar struct {
 	sync.RWMutex
 	envName    string
 	cacheFor   string
-	cacheValue interface{}
+	cacheValue any
 }
 
 // Get returns a Value for an EnvPathList.
-func (envli *envListVar) Get() interface{} {
+func (envli *envListVar) Get() any {
 	envli.Lock()
 	defer envli.Unlock()
 
@@ -60,12 +60,12 @@ func (envli *envListVar) Get() interface{} {
 }
 
 // Set sets an EnvPathList. The underlying environment variable is set.
-func (envli *envListVar) Set(v interface{}) error {
+func (envli *envListVar) Set(v any) error {
 	var (
 		paths      []string
 		errElement error
 	)
-	errIterate := vals.Iterate(v, func(v interface{}) bool {
+	errIterate := vals.Iterate(v, func(v any) bool {
 		s, ok := v.(string)
 		if !ok {
 			errElement = ErrPathMustBeString
@@ -81,7 +81,7 @@ func (envli *envListVar) Set(v interface{}) error {
 	})
 
 	if errElement != nil || errIterate != nil {
-		return diag.Errors(errElement, errIterate)
+		return errutil.Multi(errElement, errIterate)
 	}
 
 	envli.Lock()

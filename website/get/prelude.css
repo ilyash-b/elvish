@@ -1,8 +1,141 @@
-.notice {
-    text-align: center;
-    background-color: #ddd;
+/* Cancel the global width restriction so that we can give the div.form-wrapper
+   a full-width gray background. We then re-apply that width to elements.
+
+   This is quite tedious - an alternative solution is to force the width of
+   div.form-wrapper to 100vw, but it suffers from the superfluous scrollbar
+   problem (https://github.com/w3c/csswg-drafts/issues/6026). */
+#main {
+  max-width: none;
+  padding: 0;
 }
 
-.dark .notice {
-    background-color: #333;
+/* Give the form a full-width gray background. */
+.form-wrapper {
+  width: 100%;
+  margin: -32px 0 16px;
+  padding: 24px 0;
+  background-color: #f0f0f0;
+}
+
+.dark .form-wrapper {
+  background-color: #222;
+}
+
+/* Re-establish the width restriction. */
+form, .content, .article-list {
+  margin: auto;
+  max-width: 832px;
+  padding: 0 16px;
+}
+
+input[type="radio"] {
+  position: fixed;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.control {
+  display: flex;
+  margin-bottom: 8px;
+}
+
+.control > header {
+  flex: 0 0 88px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: black;
+  color: white;
+  border: 1px solid black;
+  border-right: none;
+  border-top-left-radius: 10px;
+  border-bottom-left-radius: 10px;
+}
+
+.widgets {
+  display: flex;
+  /* Constrain the background of children to within the rounded corner. The
+     content should never actually overflow. */
+  overflow: hidden;
+  flex-wrap: wrap;
+  border: 1px solid black;
+  border-left: none;
+  border-top-right-radius: 10px;
+  border-bottom-right-radius: 10px;
+}
+
+.option {
+  padding: 6px 8px;
+  color: black;
+  background-color: white;
+  cursor: pointer;
+  /* When the options need multiple rows, grow to fill each row and center the
+     text. */
+  flex: 1 0 auto;
+  text-align: center;
+}
+
+.option:has(> input:disabled) {
+  cursor: not-allowed;
+  background-image: repeating-linear-gradient(
+    -45deg,
+    white, white 8px,
+    #d0d0d0 8px, #d0d0d0 16px
+  );
+}
+
+.option:hover {
+  background: #f0f0f0;
+}
+
+.option:has(> input:checked) {
+  background: var(--blue-800);
+  color: white;
+}
+
+details {
+  padding: 4px 6px;
+  margin: 0 -6px;
+  background: #dadada;
+  border-radius: 6px;
+}
+
+.dark details {
+  background: #333;
+}
+
+details > summary {
+  cursor: pointer;
+}
+
+.advanced {
+  padding-top: 8px;
+}
+
+.advanced .control input[type="text"] {
+  font-size: 0.8em;
+  font-family: var(--code-font);
+  padding: 2px 4px;
+  width: 228px;
+  margin: 6px;
+}
+
+/* Needed for the <code> around "sudo" and "doas" options in dark mode. */
+.advanced code {
+  color: unset;
+  background-color: unset;
+}
+
+.small-print {
+  font-size: 0.85em;
+  padding-left: 12px;
+  /* The standard margin-bottom of block elements, needed due to the rule on
+     .small-print p below. */
+  margin-bottom: 12px;
+}
+
+.small-print p {
+  /* If the small-print text has multiple paragraphs, make them vertically more
+     compact. */
+  margin-bottom: 6px;
 }

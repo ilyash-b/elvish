@@ -5,27 +5,28 @@ import (
 	"strings"
 
 	"src.elv.sh/pkg/parse"
+	"src.elv.sh/pkg/parse/cmpd"
 )
 
 var sourceText = parse.SourceText
 
 // Represents a region to be highlighted.
 type region struct {
-	begin int
-	end   int
+	Begin int
+	End   int
 	// Regions can be lexical or semantic. Lexical regions always correspond to
 	// a leaf node in the parse tree, either a parse.Primary node or a parse.Sep
 	// node. Semantic regions may span several leaves and override all lexical
 	// regions in it.
-	kind regionKind
+	Kind regionKind
 	// In lexical regions for Primary nodes, this field corresponds to the Type
 	// field of the node (e.g. "bareword", "single-quoted"). In lexical regions
 	// for Sep nodes, this field is simply the source text itself (e.g. "(",
-	// "|"), except for comments, which have typ == "comment".
+	// "|"), except for comments, which have Type == "comment".
 	//
 	// In semantic regions, this field takes a value from a fixed list (see
 	// below).
-	typ string
+	Type string
 }
 
 type regionKind int
@@ -61,12 +62,6 @@ const (
 )
 
 func getRegions(n parse.Node) []region {
-	regions := getRegionsInner(n)
-	regions = fixRegions(regions)
-	return regions
-}
-
-func getRegionsInner(n parse.Node) []region {
 	var regions []region
 	emitRegions(n, func(n parse.Node, kind regionKind, typ string) {
 		regions = append(regions, region{n.Range().From, n.Range().To, kind, typ})
@@ -78,11 +73,11 @@ func fixRegions(regions []region) []region {
 	// Sort regions by the begin position, putting semantic regions before
 	// lexical regions.
 	sort.Slice(regions, func(i, j int) bool {
-		if regions[i].begin < regions[j].begin {
+		if regions[i].Begin < regions[j].Begin {
 			return true
 		}
-		if regions[i].begin == regions[j].begin {
-			return regions[i].kind == semanticRegion && regions[j].kind == lexicalRegion
+		if regions[i].Begin == regions[j].Begin {
+			return regions[i].Kind == semanticRegion && regions[j].Kind == lexicalRegion
 		}
 		return false
 	})
@@ -90,11 +85,11 @@ func fixRegions(regions []region) []region {
 	var newRegions []region
 	lastEnd := 0
 	for _, r := range regions {
-		if r.begin < lastEnd {
+		if r.Begin < lastEnd {
 			continue
 		}
 		newRegions = append(newRegions, r)
-		lastEnd = r.end
+		lastEnd = r.End
 	}
 	return newRegions
 }
@@ -114,15 +109,6 @@ func emitRegions(n parse.Node, f func(parse.Node, regionKind, string)) {
 }
 
 func emitRegionsInForm(n *parse.Form, f func(parse.Node, regionKind, string)) {
-	// Left hands of temporary assignments.
-	for _, an := range n.Assignments {
-		if an.Left != nil && an.Left.Head != nil {
-			f(an.Left.Head, semanticRegion, variableRegion)
-		}
-	}
-	if n.Head == nil {
-		return
-	}
 	// Special forms.
 	// TODO: This only highlights bareword special commands, however currently
 	// quoted special commands are also possible (e.g `"if" $true { }` is
@@ -131,6 +117,8 @@ func emitRegionsInForm(n *parse.Form, f func(parse.Node, regionKind, string)) {
 	switch head {
 	case "var", "set", "tmp":
 		emitRegionsInAssign(n, f)
+	case "del":
+		emitRegionsInDel(n, f)
 	case "if":
 		emitRegionsInIf(n, f)
 	case "for":
@@ -150,6 +138,12 @@ func emitRegionsInAssign(n *parse.Form, f func(parse.Node, regionKind, string)) 
 			f(arg, semanticRegion, keywordRegion)
 			break
 		}
+		emitVariableRegion(arg, f)
+	}
+}
+
+func emitRegionsInDel(n *parse.Form, f func(parse.Node, regionKind, string)) {
+	for _, arg := range n.Args {
 		emitVariableRegion(arg, f)
 	}
 }
@@ -198,16 +192,23 @@ func emitRegionsInTry(n *parse.Form, f func(parse.Node, regionKind, string)) {
 		}
 		return false
 	}
-	if matchKW("except") {
-		if i+1 < len(n.Args) && len(n.Args[i+1].Indexings) > 0 {
+	if matchKW("except") || matchKW("catch") {
+		if i+1 < len(n.Args) && isStringLiteral(n.Args[i+1]) {
 			f(n.Args[i+1], semanticRegion, variableRegion)
+			i += 3
+		} else {
+			i += 2
 		}
-		i += 3
 	}
 	if matchKW("else") {
 		i += 2
 	}
 	matchKW("finally")
+}
+
+func isStringLiteral(n *parse.Compound) bool {
+	_, ok := cmpd.StringLiteral(n)
+	return ok
 }
 
 func emitRegionsInPrimary(n *parse.Primary, f func(parse.Node, regionKind, string)) {

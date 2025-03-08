@@ -16,42 +16,6 @@ import (
 	"src.elv.sh/pkg/ui"
 )
 
-//elvdoc:var prompt
-//
-// See [Prompts](#prompts).
-
-//elvdoc:var -prompt-eagerness
-//
-// See [Prompt Eagerness](#prompt-eagerness).
-
-//elvdoc:var prompt-stale-threshold
-//
-// See [Stale Prompt](#stale-prompt).
-
-//elvdoc:var prompt-stale-transformer.
-//
-// See [Stale Prompt](#stale-prompt).
-
-//elvdoc:var rprompt
-//
-// See [Prompts](#prompts).
-
-//elvdoc:var -rprompt-eagerness
-//
-// See [Prompt Eagerness](#prompt-eagerness).
-
-//elvdoc:var rprompt-stale-threshold
-//
-// See [Stale Prompt](#stale-prompt).
-
-//elvdoc:var rprompt-stale-transformer.
-//
-// See [Stale Prompt](#stale-prompt).
-
-//elvdoc:var rprompt-persistent
-//
-// See [RPrompt Persistency](#rprompt-persistency).
-
 func initPrompts(appSpec *cli.AppSpec, nt notifier, ev *eval.Evaler, nb eval.NsBuilder) {
 	promptVal, rpromptVal := getDefaultPromptVals()
 	initPrompt(&appSpec.Prompt, "prompt", promptVal, nt, ev, nb)
@@ -127,12 +91,12 @@ func defaultStaleTransform(original ui.Text) ui.Text {
 
 // Calls a function with the given arguments and closed input, and concatenates
 // its outputs to a styled text. Used to call prompts and stale transformers.
-func callForStyledText(nt notifier, ev *eval.Evaler, ctx string, fn eval.Callable, args ...interface{}) ui.Text {
+func callForStyledText(nt notifier, ev *eval.Evaler, ctx string, fn eval.Callable, args ...any) ui.Text {
 	var (
 		result      ui.Text
 		resultMutex sync.Mutex
 	)
-	add := func(v interface{}) {
+	add := func(v any) {
 		resultMutex.Lock()
 		defer resultMutex.Unlock()
 		newResult, err := result.Concat(v)
@@ -144,7 +108,7 @@ func callForStyledText(nt notifier, ev *eval.Evaler, ctx string, fn eval.Callabl
 	}
 
 	// Value outputs are concatenated.
-	valuesCb := func(ch <-chan interface{}) {
+	valuesCb := func(ch <-chan any) {
 		for v := range ch {
 			add(v)
 		}

@@ -5,7 +5,6 @@ import (
 	"reflect"
 	"strconv"
 	"testing"
-	"time"
 
 	"src.elv.sh/pkg/persistent/hash"
 )
@@ -33,7 +32,7 @@ const (
 type testKey uint64
 type anotherTestKey uint32
 
-func equalFunc(k1, k2 interface{}) bool {
+func equalFunc(k1, k2 any) bool {
 	switch k1 := k1.(type) {
 	case testKey:
 		t2, ok := k2.(testKey)
@@ -45,7 +44,7 @@ func equalFunc(k1, k2 interface{}) bool {
 	}
 }
 
-func hashFunc(k interface{}) uint32 {
+func hashFunc(k any) uint32 {
 	switch k := k.(type) {
 	case uint32:
 		return k
@@ -71,10 +70,6 @@ type refEntry struct {
 
 func hex(i uint64) string {
 	return "0x" + strconv.FormatUint(i, 16)
-}
-
-func init() {
-	rand.Seed(time.Now().UTC().UnixNano())
 }
 
 var randomStrings []string
@@ -154,7 +149,7 @@ var marshalJSONTests = []struct {
 }{
 	{makeHashMap(uint32(1), "a", "2", "b"), `{"1":"a","2":"b"}`, false},
 	// Invalid key type
-	{makeHashMap([]interface{}{}, "x"), "", true},
+	{makeHashMap([]any{}, "x"), "", true},
 }
 
 func TestMarshalJSON(t *testing.T) {
@@ -175,7 +170,7 @@ func TestMarshalJSON(t *testing.T) {
 	}
 }
 
-func makeHashMap(data ...interface{}) Map {
+func makeHashMap(data ...any) Map {
 	m := empty
 	for i := 0; i+1 < len(data); i += 2 {
 		k, v := data[i], data[i+1]
@@ -256,7 +251,7 @@ func testMapContent(t *testing.T, m Map, ref map[testKey]string) {
 }
 
 func testIterator(t *testing.T, m Map, ref map[testKey]string) {
-	ref2 := map[interface{}]interface{}{}
+	ref2 := map[any]any{}
 	for k, v := range ref {
 		ref2[k] = v
 	}
@@ -280,7 +275,7 @@ func TestNilKey(t *testing.T) {
 			t.Errorf(".Len -> %d, want %d", m.Len(), l)
 		}
 	}
-	testIndex := func(wantVal interface{}, wantOk bool) {
+	testIndex := func(wantVal any, wantOk bool) {
 		val, ok := m.Index(nil)
 		if val != wantVal {
 			t.Errorf(".Index -> %v, want %v", val, wantVal)
@@ -308,12 +303,12 @@ func TestNilKey(t *testing.T) {
 
 func TestIterateMapWithNilKey(t *testing.T) {
 	m := empty.Assoc("k", "v").Assoc(nil, "nil value")
-	var collected []interface{}
+	var collected []any
 	for it := m.Iterator(); it.HasElem(); it.Next() {
 		k, v := it.Elem()
 		collected = append(collected, k, v)
 	}
-	wantCollected := []interface{}{nil, "nil value", "k", "v"}
+	wantCollected := []any{nil, "nil value", "k", "v"}
 	if !reflect.DeepEqual(collected, wantCollected) {
 		t.Errorf("collected %v, want %v", collected, wantCollected)
 	}
@@ -323,7 +318,7 @@ func BenchmarkSequentialConjNative1(b *testing.B) { nativeSequentialAdd(b.N, N1)
 func BenchmarkSequentialConjNative2(b *testing.B) { nativeSequentialAdd(b.N, N2) }
 func BenchmarkSequentialConjNative3(b *testing.B) { nativeSequentialAdd(b.N, N3) }
 
-// nativeSequntialAdd starts with an empty native map and adds elements 0...n-1
+// nativeSequentialAdd starts with an empty native map and adds elements 0...n-1
 // to the map, using the same value as the key, repeating for N times.
 func nativeSequentialAdd(N int, n uint32) {
 	for r := 0; r < N; r++ {
@@ -353,7 +348,7 @@ func BenchmarkRandomStringsConjNative1(b *testing.B) { nativeRandomStringsAdd(b,
 func BenchmarkRandomStringsConjNative2(b *testing.B) { nativeRandomStringsAdd(b, N2) }
 func BenchmarkRandomStringsConjNative3(b *testing.B) { nativeRandomStringsAdd(b, N3) }
 
-// nativeSequntialAdd starts with an empty native map and adds n random strings
+// nativeRandomStringsAdd starts with an empty native map and adds n random strings
 // to the map, using the same value as the key, repeating for b.N times.
 func nativeRandomStringsAdd(b *testing.B, n int) {
 	ss := getRandomStrings(b)

@@ -10,32 +10,6 @@ import (
 	"src.elv.sh/pkg/eval"
 )
 
-//elvdoc:var history:binding
-//
-// Binding table for the history mode.
-
-//elvdoc:fn history:start
-//
-// Starts the history mode.
-
-//elvdoc:fn history:up
-//
-// Walks to the previous entry in history mode.
-
-//elvdoc:fn history:down
-//
-// Walks to the next entry in history mode.
-
-//elvdoc:fn history:down-or-quit
-//
-// Walks to the next entry in history mode, or quit the history mode if already
-// at the newest entry.
-
-//elvdoc:fn history:fast-forward
-//
-// Import command history entries that happened after the current session
-// started.
-
 func initHistWalk(ed *Editor, ev *eval.Evaler, hs *histStore, nb eval.NsBuilder) {
 	bindingVar := newBindingVar(emptyBindingsMap)
 	bindings := newMapBindings(ed, ev, bindingVar)
@@ -43,11 +17,10 @@ func initHistWalk(ed *Editor, ev *eval.Evaler, hs *histStore, nb eval.NsBuilder)
 	nb.AddNs("history",
 		eval.BuildNsNamed("edit:history").
 			AddVar("binding", bindingVar).
-			AddGoFns(map[string]interface{}{
+			AddGoFns(map[string]any{
 				"start": func() { notifyError(app, histwalkStart(app, hs, bindings)) },
 				"up":    func() { notifyError(app, histwalkDo(app, modes.Histwalk.Prev)) },
-
-				"down": func() { notifyError(app, histwalkDo(app, modes.Histwalk.Next)) },
+				"down":  func() { notifyError(app, histwalkDo(app, modes.Histwalk.Next)) },
 				"down-or-quit": func() {
 					err := histwalkDo(app, modes.Histwalk.Next)
 					if err == histutil.ErrEndOfHistory {
@@ -56,7 +29,7 @@ func initHistWalk(ed *Editor, ev *eval.Evaler, hs *histStore, nb eval.NsBuilder)
 						notifyError(app, err)
 					}
 				},
-
+				"accept":       func() { notifyError(app, histwalkDo(app, modes.Histwalk.Accept)) },
 				"fast-forward": hs.FastForward,
 			}))
 }
@@ -68,7 +41,8 @@ func histwalkStart(app cli.App, hs *histStore, bindings tk.Bindings) error {
 	}
 	buf := codeArea.CopyState().Buffer
 	w, err := modes.NewHistwalk(app, modes.HistwalkSpec{
-		Bindings: bindings, Store: hs, Prefix: buf.Content[:buf.Dot]})
+		Bindings: bindings, Store: hs, Prefix: buf.Content[:buf.Dot],
+	})
 	if w != nil {
 		app.PushAddon(w)
 	}

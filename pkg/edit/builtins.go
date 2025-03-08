@@ -15,53 +15,13 @@ import (
 	"src.elv.sh/pkg/ui"
 )
 
-//elvdoc:fn binding-table
-//
-// Converts a normal map into a binding map.
-
-//elvdoc:fn -dump-buf
-//
-// Dumps the current UI buffer as HTML. This command is used to generate
-// "ttyshots" on the [website](https://elv.sh).
-//
-// Example:
-//
-// ```elvish
-// set edit:global-binding[Ctrl-X] = { print (edit:-dump-buf) > ~/a.html }
-// ```
-
-func dumpBuf(tty cli.TTY) string {
-	return bufToHTML(tty.Buffer())
-}
-
-//elvdoc:fn close-mode
-//
-// Closes the current active mode.
-
 func closeMode(app cli.App) {
 	app.PopAddon()
 }
 
-//elvdoc:fn end-of-history
-//
-// Adds a notification saying "End of history".
-
 func endOfHistory(app cli.App) {
 	app.Notify(ui.T("End of history"))
 }
-
-//elvdoc:fn redraw
-//
-// ```elvish
-// edit:redraw &full=$false
-// ```
-//
-// Triggers a redraw.
-//
-// The `&full` option controls whether to do a full redraw. By default, all
-// redraws performed by the line editor are incremental redraws, updating only
-// the part of the screen that has changed from the last redraw. A full redraw
-// updates the entire command line.
 
 type redrawOpts struct{ Full bool }
 
@@ -75,27 +35,12 @@ func redraw(app cli.App, opts redrawOpts) {
 	}
 }
 
-//elvdoc:fn clear
-//
-// ```elvish
-// edit:clear
-// ```
-//
-// Clears the screen.
-//
-// This command should be used in place of the external `clear` command to clear
-// the screen.
-
 func clear(app cli.App, tty cli.TTY) {
 	tty.HideCursor()
 	tty.ClearScreen()
 	app.RedrawFull()
 	tty.ShowCursor()
 }
-
-//elvdoc:fn insert-raw
-//
-// Requests the next terminal input to be inserted uninterpreted.
 
 func insertRaw(app cli.App, tty cli.TTY) {
 	codeArea, ok := focusedCodeArea(app)
@@ -121,17 +66,32 @@ func insertRaw(app cli.App, tty cli.TTY) {
 	app.PushAddon(w)
 }
 
-//elvdoc:fn key
-//
-// ```elvish
-// edit:key $string
-// ```
-//
-// Parses a string into a key.
+func insertKeyName(app cli.App) {
+	codeArea, ok := focusedCodeArea(app)
+	if !ok {
+		return
+	}
+	w := modes.NewStub(modes.StubSpec{
+		Bindings: tk.FuncBindings(func(w tk.Widget, event term.Event) bool {
+			switch event := event.(type) {
+			case term.KeyEvent:
+				codeArea.MutateState(func(s *tk.CodeAreaState) {
+					s.Buffer.InsertAtDot(ui.Key(event).String())
+				})
+				app.PopAddon()
+				return true
+			default:
+				return false
+			}
+		}),
+		Name: " KEY NAME ",
+	})
+	app.PushAddon(w)
+}
 
 var errMustBeKeyOrString = errors.New("must be key or string")
 
-func toKey(v interface{}) (ui.Key, error) {
+func toKey(v any) (ui.Key, error) {
 	switch v := v.(type) {
 	case ui.Key:
 		return v, nil
@@ -142,22 +102,7 @@ func toKey(v interface{}) (ui.Key, error) {
 	}
 }
 
-//elvdoc:fn notify
-//
-// ```elvish
-// edit:notify $message
-// ```
-//
-// Prints a notification message. The argument may be a string or a [styled
-// text](builtin.html#styled).
-//
-// If called while the editor is active, this will print the message above the
-// editor, and redraw the editor.
-//
-// If called while the editor is inactive, the message will be queued, and shown
-// once the editor becomes active.
-
-func notify(app cli.App, x interface{}) error {
+func notify(app cli.App, x any) error {
 	// TODO: De-duplicate with the implementation of the styled builtin.
 	var t ui.Text
 	switch x := x.(type) {
@@ -173,60 +118,40 @@ func notify(app cli.App, x interface{}) error {
 	return nil
 }
 
-//elvdoc:fn return-line
-//
-// Causes the Elvish REPL to end the current read iteration and evaluate the
-// code it just read. If called from a key binding, takes effect after the key
-// binding returns.
-
-//elvdoc:fn return-eof
-//
-// Causes the Elvish REPL to terminate. If called from a key binding, takes
-// effect after the key binding returns.
-
-//elvdoc:fn smart-enter
-//
-// Inserts a literal newline if the current code is not syntactically complete
-// Elvish code. Accepts the current line otherwise.
-
-func smartEnter(app cli.App) {
-	codeArea, ok := focusedCodeArea(app)
+func smartEnter(ed *Editor) {
+	codeArea, ok := focusedCodeArea(ed.app)
 	if !ok {
 		return
 	}
-	commit := false
+	insertedNewline := false
 	codeArea.MutateState(func(s *tk.CodeAreaState) {
 		buf := &s.Buffer
-		if isSyntaxComplete(buf.Content) {
-			commit = true
-		} else {
+		if !isSyntaxComplete(buf.Content) {
 			buf.InsertAtDot("\n")
+			insertedNewline = true
 		}
 	})
-	if commit {
-		app.CommitCode()
+	if insertedNewline {
+		return
 	}
+	// TODO: Check whether the code area is actually the main code area. This
+	// isn't a problem for now because smart-enter is only bound to Enter in
+	// $edit:insert:binding, which is used by the main code area.
+	//
+	// TODO: This is prone to race condition if the code area was just mutated.
+	ed.applyAutofix()
+	ed.app.CommitCode()
 }
 
 func isSyntaxComplete(code string) bool {
-	_, err := parse.Parse(parse.Source{Code: code}, parse.Config{})
-	if err != nil {
-		for _, e := range err.(*parse.Error).Entries {
-			if e.Context.From == len(code) {
-				return false
-			}
+	_, err := parse.Parse(parse.Source{Name: "[syntax check]", Code: code}, parse.Config{})
+	for _, e := range parse.UnpackErrors(err) {
+		if e.Context.From == len(code) {
+			return false
 		}
 	}
 	return true
 }
-
-//elvdoc:fn wordify
-//
-//
-// ```elvish
-// edit:wordify $code
-// ```
-// Breaks Elvish code into words.
 
 func wordify(fm *eval.Frame, code string) error {
 	out := fm.ValueOutput()
@@ -240,24 +165,24 @@ func wordify(fm *eval.Frame, code string) error {
 }
 
 func initTTYBuiltins(app cli.App, tty cli.TTY, nb eval.NsBuilder) {
-	nb.AddGoFns(map[string]interface{}{
-		"-dump-buf":  func() string { return dumpBuf(tty) },
-		"insert-raw": func() { insertRaw(app, tty) },
-		"clear":      func() { clear(app, tty) },
+	nb.AddGoFns(map[string]any{
+		"insert-raw":       func() { insertRaw(app, tty) },
+		"-insert-key-name": func() { insertKeyName(app) },
+		"clear":            func() { clear(app, tty) },
 	})
 }
 
-func initMiscBuiltins(app cli.App, nb eval.NsBuilder) {
-	nb.AddGoFns(map[string]interface{}{
+func initMiscBuiltins(ed *Editor, nb eval.NsBuilder) {
+	nb.AddGoFns(map[string]any{
 		"binding-table":  makeBindingMap,
-		"close-mode":     func() { closeMode(app) },
-		"end-of-history": func() { endOfHistory(app) },
+		"close-mode":     func() { closeMode(ed.app) },
+		"end-of-history": func() { endOfHistory(ed.app) },
 		"key":            toKey,
-		"notify":         func(x interface{}) error { return notify(app, x) },
-		"redraw":         func(opts redrawOpts) { redraw(app, opts) },
-		"return-line":    app.CommitCode,
-		"return-eof":     app.CommitEOF,
-		"smart-enter":    func() { smartEnter(app) },
+		"notify":         func(x any) error { return notify(ed.app, x) },
+		"redraw":         func(opts redrawOpts) { redraw(ed.app, opts) },
+		"return-line":    ed.app.CommitCode,
+		"return-eof":     ed.app.CommitEOF,
+		"smart-enter":    func() { smartEnter(ed) },
 		"wordify":        wordify,
 	})
 }

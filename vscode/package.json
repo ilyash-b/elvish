@@ -1,0 +1,183 @@
+{
+    "name": "elvish",
+    "displayName": "Elvish",
+    "description": "Elvish language support for Visual Studio Code",
+    "version": "0.4.2",
+    "publisher": "elves",
+    "license": "BSD-2-Clause",
+    "icon": "icon.png",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/elves/elvish"
+    },
+    "engines": {
+        "vscode": "^1.65.0"
+    },
+    "categories": [
+        "Programming Languages",
+        "Snippets"
+    ],
+    "activationEvents": [
+        "onLanguage:styledown"
+    ],
+    "main": "./dist/extension.js",
+    "contributes": {
+        "languages": [
+            {
+                "id": "elvish",
+                "aliases": [
+                    "Elvish",
+                    "elvish"
+                ],
+                "extensions": [
+                    ".elv"
+                ],
+                "firstLine": "^#!/.*\\belvish\\b$",
+                "configuration": "./language-configuration.json"
+            },
+            {
+                "id": "elvish-transcript",
+                "aliases": [
+                    "Elvish transcript",
+                    "elvish transcript"
+                ],
+                "extensions": [
+                    ".elvts"
+                ],
+                "configuration": "./transcript-language-configuration.json"
+            },
+            {
+                "id": "elvish-in-markdown",
+                "aliases": [
+                    "Elvish in Markdown"
+                ]
+            },
+            {
+                "id": "styledown",
+                "aliases": [
+                    "Styledown"
+                ],
+                "extensions": [
+                    ".styledown"
+                ]
+            }
+        ],
+        "grammars": [
+            {
+                "language": "elvish",
+                "scopeName": "source.elvish",
+                "path": "./syntaxes/elvish.tmLanguage.json"
+            },
+            {
+                "language": "elvish-transcript",
+                "scopeName": "source.elvish-transcript",
+                "path": "./syntaxes/elvish-transcript.tmLanguage.json",
+                "embeddedLanguages": {
+                    "meta.embedded.block.elvish": "elvish"
+                }
+            },
+            {
+                "language": "elvish-in-markdown",
+                "scopeName": "source.elvish.in.markdown",
+                "path": "./syntaxes/elvish-in-markdown.tmLanguage.json",
+                "injectTo": [
+                    "text.html.markdown"
+                ],
+                "embeddedLanguages": {
+                    "meta.embedded.block.elvish": "elvish",
+                    "meta.embedded.block.elvish-transcript": "elvish-transcript"
+                }
+            }
+        ],
+        "configuration": {
+            "title": "Elvish",
+            "properties": {
+                "elvish.trace.server": {
+                    "type": "string",
+                    "enum": [
+                        "off",
+                        "messages",
+                        "verbose"
+                    ],
+                    "default": "off",
+                    "description": "Trace communication between VS Code and the Elvish language server. Trace messages are shown in the Elvish Language Server output channel."
+                }
+            }
+        },
+        "snippets": [
+            {
+                "language": "elvish",
+                "path": "./snippets/elvish.json"
+            }
+        ],
+        "commands": [
+            {
+                "command": "elvish.updateTranscriptOutputForCodeAtCursor",
+                "title": "Elvish: update transcript output for code at cursor"
+            }
+        ],
+        "menus": {
+            "commandPalette": [
+                {
+                    "command": "elvish.updateTranscriptOutputForCodeAtCursor",
+                    "when": "editorLangId =~ /^elvish(-transcript)?$/"
+                }
+            ]
+        },
+        "keybindings": [
+            {
+                "key": "alt+enter",
+                "command": "elvish.updateTranscriptOutputForCodeAtCursor",
+                "when": "editorTextFocus && editorLangId =~ /^elvish(-transcript)?$/"
+            },
+            {
+                "key": "alt+o",
+                "command": "elvish.openTranscriptPromptBelow",
+                "when": "editorTextFocus && editorLangId == elvish-transcript"
+            },
+            {
+                "key": "alt+o",
+                "command": "vim.remap",
+                "args": {
+                    "commands": [
+                        {
+                            "command": "elvish.openTranscriptPromptBelow",
+                            "args": []
+                        }
+                    ],
+                    "after": [
+                        "i"
+                    ]
+                },
+                "when": "editorTextFocus && editorLangId == elvish-transcript && vim.active && vim.mode == 'Normal'"
+            },
+            {
+                "key": "alt-k",
+                "command": "editor.action.insertSnippet",
+                "args": {
+                    "snippet": "send ${1:events}\n   render"
+                },
+                "when": "editorTextFocus && editorLangId == elvish-transcript"
+            }
+        ]
+    },
+    "scripts": {
+        "vscode:prepublish": "npm run check && npm run build",
+        "check": "tsc -p . --noEmit",
+        "build": "esbuild ./src/extension.ts --bundle --outfile=./dist/extension.js --external:vscode --format=cjs --platform=node --minify --sourcemap",
+        "watch": "npm run build -- --watch"
+    },
+    "dependencies": {
+        "vscode-languageclient": "^9.0.1"
+    },
+    "devDependencies": {
+        "@types/node": "^22.13.10",
+        "@types/vscode": "^1.65.0",
+        "@typescript-eslint/eslint-plugin": "^8.26.0",
+        "@typescript-eslint/parser": "^8.26.0",
+        "esbuild": "^0.25.0",
+        "eslint": "^9.22.0",
+        "typescript": "^5.8.2",
+        "typescript-formatter": "^7.2.2"
+    }
+}

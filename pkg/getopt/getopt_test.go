@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"testing"
 
-	"src.elv.sh/pkg/diag"
+	"src.elv.sh/pkg/errutil"
 )
 
 var (
@@ -189,7 +189,7 @@ var parseTests = []struct {
 		args: []string{"-b", "-f"},
 		wantOpts: []*Option{
 			{Spec: &OptionSpec{Short: 'b', Arity: OptionalArgument}, Unknown: true}},
-		wantErr: diag.Errors(
+		wantErr: errutil.Multi(
 			errors.New("missing argument for -f"), errors.New("unknown option -b")),
 	},
 }
@@ -198,7 +198,7 @@ func TestParse(t *testing.T) {
 	for _, tc := range parseTests {
 		t.Run(tc.name, func(t *testing.T) {
 			opts, args, err := Parse(tc.args, specs, tc.cfg)
-			check := func(name string, got, want interface{}) {
+			check := func(name string, got, want any) {
 				if !reflect.DeepEqual(got, want) {
 					t.Errorf("Parse(%#v) (config = %v)\ngot %s = %v, want %v",
 						tc.args, tc.cfg, name, got, want)
@@ -306,7 +306,7 @@ func TestComplete(t *testing.T) {
 	for _, tc := range completeTests {
 		t.Run(tc.name, func(t *testing.T) {
 			opts, args, ctx := Complete(tc.args, specs, tc.cfg)
-			check := func(name string, got, want interface{}) {
+			check := func(name string, got, want any) {
 				if !reflect.DeepEqual(got, want) {
 					t.Errorf("Parse(%#v) (config = %v)\ngot %s = %v, want %v",
 						tc.args, tc.cfg, name, got, want)

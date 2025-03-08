@@ -1,0 +1,32 @@
+{
+	"$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+	"name": "Elvish transcript",
+	"scopeName": "source.elvish-transcript",
+	"fileTypes": [
+		"elvts"
+	],
+	"patterns": [
+		{
+			"begin": "(^|\\G)[~/][^ ]*> ",
+			"while": "(^|\\G)   ",
+			"contentName": "meta.embedded.block.elvish",
+			"patterns": [
+				{
+					"include": "source.elvish"
+				}
+			]
+		},
+		{
+			"name": "markup.heading.1.elvish-transcript",
+			"match": "(^|\\G)# .* #$"
+		},
+		{
+			"name": "markup.heading.2.elvish-transcript",
+			"match": "(^|\\G)## .* ##$"
+		},
+		{
+			"name": "comment.line.double-slash.elvish-transcript",
+			"match": "(^|\\G)//.*$"
+		}
+	]
+}

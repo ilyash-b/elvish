@@ -17,12 +17,12 @@ If you are mainly interested in using Elvish interactively, jump directly to
 
 Many basic language features of Elvish are very familiar to traditional shells.
 A notable exception is control structures, covered [below](#control-structures)
-in the _advanced language features_ section.
+in the *advanced language features* section.
 
 ## Comparison with bash
 
-If you are familiar with bash, the following table shows some (rough)
-correspondence between Elvish and bash syntax:
+The following table shows some (rough) correspondence between Elvish and bash
+syntax:
 
 <table>
   <tr>
@@ -86,7 +86,10 @@ correspondence between Elvish and bash syntax:
     <td colspan="2"><code>echo ~/foo</code></td>
   </tr>
   <tr>
-    <td rowspan="3"><a href="#setting-variables">Setting variables</a></td>
+    <td rowspan="4"><a href="#variables">Variables</a></td>
+    <td colspan="2"><code>echo $foo</code></td>
+  </tr>
+  <tr>
     <td><code>var foo = bar</code></td>
     <td><code>foo=bar</code></td>
   </tr>
@@ -95,15 +98,24 @@ correspondence between Elvish and bash syntax:
     <td><code>foo=bar</code></td>
   </tr>
   <tr>
-    <td colspan="2"><code>foo=bar cmd</code></td>
+    <td><code>{ tmp foo = bar; some-command }</code></td>
+    <td><code>foo=bar some-command</code></td>
   </tr>
   <tr>
-    <td rowspan="2"><a href="#using-variables">Using variables</a></td>
-    <td colspan="2"><code>echo $foo</code></td>
-  </tr>
-  <tr>
+    <td rowspan="4"><a href="#environment-variables">Environment variables</a></td>
     <td><code>echo $E:HOME</code></td>
     <td><code>echo $HOME</code></td>
+  </tr>
+  <tr>
+    <td><code>set E:foo = bar</code></td>
+    <td><code>export foo=bar</code></td>
+  </tr>
+  <tr>
+    <td><code>{ tmp E:foo = bar; some-command }</code></td>
+    <td><code>export foo; foo=bar some-command</code></td>
+  </tr>
+  <tr>
+    <td colspan="2"><code>env foo=bar some-command</code></td>
   </tr>
   <tr>
     <td><a href="#redirections">Redirections</a></td>
@@ -163,7 +175,7 @@ hello\world$
 
 Like [Plan 9 rc](http://doc.cat-v.org/plan_9/4th_edition/papers/rc), or zsh with
 the `RC_QUOTES` option turned on, the single quote itself can be written by
-doubling it
+doubling it:
 
 ```elvish-transcript
 ~> echo 'it''s good'
@@ -177,7 +189,7 @@ more.
 ## Double-quoted strings
 
 Like many non-shell programming languages and `$''` in bash, double-quoted
-strings support C-like escape sequences (e.g. `\n` for newline):
+strings support C-like escape sequences, like `\n` for newline:
 
 ```elvish-transcript
 ~> echo "foo\nbar"
@@ -275,18 +287,21 @@ Elvish also supports `**`, which matches multiple path components:
 d1/a.go d2/b.go d3/d4/c.go lorem.go
 ```
 
-Character classes are a bit more verbose in Elvish. First, a character set is
-written like `[set:ch]`, instead of just `[ch]`. Second, they don't appear on
-their own, but as a suffix to `?`. For example, to match files ending in either
-`.c` or `.h`, use:
+Character classes are a bit more verbose in Elvish:
+
+-   They don't appear on their own, but as a suffix to `?`;
+
+-   A character set is written like `[set:ch]`, instead of just `[ch]`.
+
+For example, to match files ending in either `.c` or `.h`, use:
 
 ```elvish-transcript
 ~> echo *.?[set:ch]
 foo.c foo.h
 ```
 
-A character set suffix can also be applied to `*`. For example, to match files
-who extension only contains `c` and `h`:
+The suffix syntax means that they can also be applied to `*`. For example, to
+match files who extension only contains `c` and `h`:
 
 ```elvish-transcript
 ~> echo *.*[set:ch]
@@ -312,9 +327,49 @@ directory of the current user is `/home/me`, and the home directory of `elf` is
 Read the language reference on
 [tilde expansion](../ref/language.html#tilde-expansion) to learn more.
 
-## Setting variables
+## Variables
 
-Variables are declared with the `var` command, and set with the `set` command:
+Like traditional shells, using the value of a variable requires the `$` prefix.
+
+```elvish-transcript
+~> var foo = bar
+~> echo $foo
+bar
+```
+
+### Field splitting
+
+Elvish does not perform `$IFS` splitting on variables, so `$foo` always
+evaluates to one value, even if it contains whitespaces and newlines:
+
+```elvish-transcript
+~> var foo = 'a b c d'
+~> touch $foo # Creates one file
+```
+
+You never need to write `"$foo"` in Elvish. In fact,
+[double-quoted strings](#double-quoted-strings) do not support interpolation in
+Elvish, so `echo "$foo"` will just print out `$foo`).
+
+If you do need to split fields, you can either do this explicitly with
+[`str:fields`](../ref/str.html#str:fields), or store a list of strings and
+["explode"](../ref/language.html#variable-use) it with `$@`:
+
+```elvish-transcript
+~> var args-as-string = 'a b c d'
+~> use str
+~> touch (str:fields $args-as-string) # creates four files
+~> var args-as-list = [a b c d]
+~> touch $@args-as-list # also creates four files
+```
+
+### Declaring and setting variables
+
+Also unlike traditional shells, variables must be declared before being used; if
+the `foo` variable wasn't declared with `var` first, `echo $foo` results in an
+error.
+
+After declaring a variable, change its value with `set`:
 
 ```elvish-transcript
 ~> var foo = bar
@@ -325,59 +380,67 @@ bar
 quux
 ```
 
-The spaces around `=` are mandatory.
+The spaces around `=` in both `var` and `set` are mandatory.
 
-Unlike traditional shells, variables must be declared before they can be set;
-setting an undeclared variable results in an error.
-
-Like traditional shells, Elvish supports setting a variable temporarily for the
-duration of a command, by prefixing the command with `foo=bar`. For example:
-
-```elvish-transcript
-~> var foo = original
-~> fn f { echo $foo }
-~> foo=temporary f
-temporary
-~> echo $foo
-original
-```
-
-Read the language reference on [the `var` command](../ref/language.html#var),
-[the `set` command](../ref/language.html#set) and
-[temporary assignments](../ref/language.html#temporary-assignment) to learn
-more.
-
-## Using variables
-
-Like traditional shells, using the value of a variable requires the `$` prefix.
+Within a [lambda](#lambdas), you can use `tmp` to set the value for the duration
+of the lambda:
 
 ```elvish-transcript
 ~> var foo = bar
+~> { tmp foo = new; echo $foo }
+new
 ~> echo $foo
 bar
 ```
 
-Unlike traditional shells, variables must be declared before being used; if the
-`foo` variable wasn't declared with `var` first, `echo $foo` results in an
-error.
+Read the language reference on [variables](../ref/language.html#variable),
+[variable use](../ref/language.html#variable-use),
+[the `var` command](../ref/language.html#var),
+[the `set` command](../ref/language.html#set) and
+[the `tmp` command](../ref/language.html#tmp) to learn more.
 
-Elvish does not perform `$IFS` splitting on variables, so `$foo` always
-evaluates to one value, even if it contains whitespaces and newlines. You never
-need to write `echo "$foo"` again. (And in fact,
-[double-quoted strings](../ref/language.html#double-quoted-string) do not
-support interpolation).
+## Environment variables
 
-Also unlike traditional shells, environment variables in Elvish live in a
-separate `E:` namespace:
+Unlike traditional shells, environment variables in Elvish live in a separate
+`E:` namespace:
 
 ```elvish-transcript
 ~> echo $E:HOME
 /home/elf
+~> set E:PATH = /bin:/sbin
 ```
 
-Read the language reference on [variables](../ref/language.html#variable),
-[variable use](../ref/language.html#variable-use) and
-[special namespaces](../ref/language.html#special-namespaces) to learn more.
+There is no concept of "exporting" in Elvish: variables in the `E:` namespace
+are always "exported", and variables outside the namespace never are.
+
+Accessing unset environment variables results in an empty string:
+
+```elvish-transcript
+~> echo $E:nonexistent
+
+```
+
+Elvish also provides a series of builtin commands (`set-env`, `unset-env`,
+`has-env` and `get-env`) that allows you to distinguish unset environment
+variables and those set to an empty string.
+
+To set an environment variable temporarily, you can use the `tmp` command like
+you would with a non-environment variable, but it is more concise to use the
+external command `env`.
+
+```elvish-transcript
+~> { tmp E:foo = bar; bash -c 'echo $foo' }
+bar
+~> env foo=bar bash -c 'echo $foo'
+bar
+```
+
+Read the language reference on the
+[`E:` namespace](../ref/language.html#special-namespaces), the
+[`set-env`](../ref/builtin.html#set-env),
+[`unset-env`](../ref/builtin.html#unset-env),
+[`has-env`](../ref/builtin.html#has-env) and
+[`get-env`](../ref/builtin.html#get-env) builtin commands to learn more.
 
 ## Redirections
 
@@ -423,8 +486,8 @@ the following command shows details of the `elvish` binary:
 -rwxr-xr-x 1 xiaq users 7813495 Mar  2 21:32 /home/xiaq/go/bin/elvish
 ```
 
-**Note**: the same feature is usually known as _command substitution_ in
-traditonal shells.
+**Note**: the same feature is usually known as *command substitution* in
+traditional shells.
 
 Unlike traditional shells, Elvish only splits the output on newlines, not any
 other whitespace characters.
@@ -453,7 +516,7 @@ Read the language reference on
 ## Command sequence
 
 Join commands with a `;` or newline to run them sequentially (insert a newline
-with <span class="key">Alt-Enter</span>):
+with <kbd>Alt-Enter</kbd>):
 
 ```elvish-transcript
 ~> echo a; echo b
@@ -625,15 +688,14 @@ Read the language reference on [lists](../ref/language.html#list) and
 
 ## Numbers
 
-Elvish has a double-precision floating-point number type, `float64`. There is no
-dedicated syntax for it; instead, it can constructed using the `float64`
-builtin:
+Elvish has a number type. There is no dedicated syntax for it; instead, it can
+constructed using the `num` builtin:
 
 ```elvish-transcript
-~> float64 1
-▶ (float64 1)
-~> float64 1e2
-▶ (float64 100)
+~> num 1
+▶ (num 1)
+~> num 1e2
+▶ (num 100)
 ```
 
 Most arithmetic commands in Elvish support both typed numbers and strings that
@@ -641,10 +703,10 @@ can be converted to numbers. They usually output typed numbers:
 
 ```elvish-transcript
 ~> + 1 2
-▶ (float64 3)
+▶ (num 3)
 ~> use math
-~> math:pow (float64 10) 3
-▶ (float64 1000)
+~> math:pow (num 10) 3
+▶ (num 1000)
 ```
 
 **Note**: The set of number types will likely expand in future.
@@ -712,8 +774,6 @@ b = bar
 opt = option
 ```
 
-There must be no space between the `]` and `{` in this case.
-
 Read the language reference on [functions](../ref/language.html#function) to
 learn more about functions.
 
@@ -780,7 +840,7 @@ Exceptions can be caught using the `try` command:
 ```elvish-transcript
 ~> try {
      false
-   } except e {
+   } catch e {
      echo 'got an exception'
    }
 got an exception
@@ -795,9 +855,10 @@ Read the language reference on
 The names of variables and functions can have **namespaces** prepended to their
 names. Namespaces always end with `:`.
 
-The [using variables](#using-variables) section has already shown the `E:`
-namespace. Other namespaces can be added by importing modules with `use`. For
-example, [the `str:` module](../ref/str.html) provides string utilities:
+The [environment variables](#environment-variables) section has already shown
+the `E:` namespace. Other namespaces can be added by importing modules with
+`use`. For example, [the `str:` module](../ref/str.html) provides string
+utilities:
 
 ```elvish-transcript
 ~> use str
@@ -855,22 +916,21 @@ UI customization options.
 
 ## Tab completion
 
-Press <span class="key">Tab</span> to start completion. For example, after
-typing `vim` and <span class="key">Space</span>, press
-<span class="key">Tab</span> to complete filenames:
+Press <kbd>Tab</kbd> to start completion. For example, after typing `vim` and
+<kbd>Space</kbd>, press <kbd>Tab</kbd> to complete filenames:
 
-@ttyshot tour/completion
+```ttyshot
+learn/tour/completion
+```
 
 Basic operations should be quite intuitive:
 
--   To navigate the candidate list, use arrow keys <span class="key">▲</span>
-    <span class="key">▼</span> <span class="key">◀</span>
-    <span class="key">▶</span> or <span class="key">Tab</span> and
-    <span class="key">Shift-Tab</span>.
+-   To navigate the candidate list, use arrow keys <kbd>▲</kbd> <kbd>▼</kbd>
+    <kbd>◀︎</kbd> <kbd>▶︎</kbd> or <kbd>Tab</kbd> and <kbd>Shift-Tab</kbd>.
 
--   To accept the selected candidate, press <span class="key">Enter</span>.
+-   To accept the selected candidate, press <kbd>Enter</kbd>.
 
--   To cancel, press <span class="key">Escape</span>.
+-   To cancel, press <kbd>Escape</kbd>.
 
 As indicated by the horizontal scrollbar, you can scroll to the right to find
 additional results that don't fit in the terminal.
@@ -879,7 +939,9 @@ You may have noticed that the cursor has moved to the right of "COMPLETING
 argument". This indicates that you can continue typing to filter candidates. For
 example, after typing `.md`, the UI looks like this:
 
-@ttyshot tour/completion-filter
+```ttyshot
+learn/tour/completion-filter
+```
 
 Read the reference on [completion API](../ref/edit.html#completion-api) to learn
 how to program and customize tab completion.
@@ -890,64 +952,75 @@ Elvish has several UI features for working with command history.
 
 ### History walking
 
-Press <span class="key">▲</span> to fetch the last command. This is called
-**history walking** mode:
+Press <kbd>▲</kbd> to fetch the last command. This is called **history walking**
+mode:
 
-@ttyshot tour/history-walk
+```ttyshot
+learn/tour/history-walk
+```
 
-Press <span class="key">▲</span> to go further back, <span class="key">▼</span>
-to go forward, or <span class="key">Escape</span> to cancel.
+Press <kbd>▲</kbd> to go further back, <kbd>▼</kbd> to go forward, or
+<kbd>Escape</kbd> to cancel.
 
 To restrict to commands that start with a prefix, simply type the prefix before
-pressing <span class="key">▲</span>. For example, to walk through commands
-starting with `echo`, type `echo` before pressing <span class="key">▲</span>:
+pressing <kbd>▲</kbd>. For example, to walk through commands starting with
+`echo`, type `echo` before pressing <kbd>▲</kbd>:
 
-@ttyshot tour/history-walk-prefix
+```ttyshot
+learn/tour/history-walk-prefix
+```
 
 ### History listing
 
-Press <span class="key">Ctrl-R</span> to list the full command history:
+Press <kbd>Ctrl-R</kbd> to list the full command history:
 
-@ttyshot tour/history-list
+```ttyshot
+learn/tour/history-list
+```
 
-Like in completion mode, type to filter the list, press
-<span class="key">▲</span> and <span class="key">▼</span> to navigate the list,
-<span class="key">Enter</span> to insert the selected entry, or <span
-class="key">Escape</span> to cancel.
+Like in completion mode, type to filter the list, press <kbd>▲</kbd> and
+<kbd>▼</kbd> to navigate the list, <kbd>Enter</kbd> to insert the selected
+entry, or <kbd>Escape</kbd> to cancel.
 
 ### Last command
 
 Finally, Elvish has a **last command** mode dedicated to inserting parts of the
-last command. Press <span class="key">Alt-,</span> to trigger it:
+last command. Press <kbd>Alt-,</kbd> to trigger it:
 
-@ttyshot tour/lastcmd
+```ttyshot
+learn/tour/lastcmd
+```
 
 ## Directory history
 
-Elvish remembers which directories you have visited. Press <span
-class="key">Ctrl-L</span> to list visited directories. Use
-<span class="key">▲</span> and <span class="key">▼</span> to navigate the list,
-<span class="key">Enter</span> to change to that directory, or
-<span class="key">Escape</span> to cancel.
+Elvish remembers which directories you have visited. Press <kbd>Ctrl-L</kbd> to
+list visited directories. Use <kbd>▲</kbd> and <kbd>▼</kbd> to navigate the
+list, <kbd>Enter</kbd> to change to that directory, or <kbd>Escape</kbd> to
+cancel.
 
-@ttyshot tour/location
+```ttyshot
+learn/tour/location
+```
 
 Type to filter:
 
-@ttyshot tour/location-filter
+```ttyshot
+learn/tour/location-filter
+```
 
 ## Navigation mode
 
-Press <span class="key">Ctrl-N</span> to start the builtin filesystem navigator,
-or **navigation mode**.
+Press <kbd>Ctrl-N</kbd> to start the builtin filesystem navigator.
 
-@ttyshot tour/navigation
+```ttyshot
+learn/tour/navigation
+```
 
 Unlike other modes, the cursor stays in the main buffer in navigation mode. This
 allows you to continue typing commands; while doing that, you can press
-<span class="key">Enter</span> to insert the selected filename. You can also
-press <span class="key">Alt-Enter</span> to insert the filename without exiting
-navigation mode; this is useful when you want to insert multiple filenames.
+<kbd>Enter</kbd> to insert the selected filename. You can also press
+<kbd>Alt-Enter</kbd> to insert the filename without exiting navigation mode;
+this is useful when you want to insert multiple filenames.
 
 ## Startup script
 
@@ -969,20 +1042,18 @@ will be called. Otherwise this definition will result in infinite recursion.
 ### Prompt customization
 
 The left and right prompts can be customized by assigning functions to
-`edit:prompt` and `edit:rprompt`. The following configuration simulates the
-default prompts, but uses fancy Unicode:
+[`edit:prompt`](../ref/edit.html#$edit:prompt) and
+[`edit:rprompt`](../ref/edit.html#$edit:rprompt). The following example defines
+prompts similar to the default, but uses fancy Unicode.
 
-```elvish
-# "tilde-abbr" abbreviates home directory to a tilde.
-set edit:prompt = { tilde-abbr $pwd; put '❱ ' }
-# "constantly" returns a function that always writes the same value(s) to
-# output; "styled" writes styled output.
-set edit:rprompt = (constantly (styled (whoami)✸(hostname) inverse))
+```ttyshot
+learn/tour/unicode-prompts
 ```
 
-This is how it looks:
-
-@ttyshot tour/unicode-prompts
+The [`tilde-abbr`](../ref/builtin.html#tilde-abbr) command abbreviates home
+directory to a tilde. The [`constantly`](../ref/builtin.html#constantly) command
+returns a function that always writes the same value(s) to the value output. The
+[`styled`](../ref/builtin.html#styled) command writes styled output.
 
 ### Changing PATH
 
@@ -994,7 +1065,7 @@ a `E:` prefix):
 set E:PATH = /opts/bin:/bin:/usr/bin
 ```
 
-But it is usually nicer to set the [`$paths`](../ref/builtin.html#paths)
+But it is usually nicer to set the [`$paths`](../ref/builtin.html#$paths)
 instead:
 
 ```elvish
@@ -1030,17 +1101,17 @@ To execute a dynamic piece of code for side effect, use
 Due to Elvish's scoping rules, files executed using either of the mechanism
 above can't create new variables in the current namespace. For example,
 `eval 'var foo = bar'; echo $foo` won't work. However, the REPL's namespace
-_can_ be manipulated with [`edit:add-var`](../ref/edit.html#edit:add-var).
+*can* be manipulated with [`edit:add-var`](../ref/edit.html#edit:add-var).
 
 ## test
 
 To test files, use commands in the [path](../ref/path.html) module.
 
-To compare numbers, use
-[number comparison commands](../ref/builtin.html#num-cmp).
+To compare numbers, use number comparison commands like
+[`<`](../ref/builtin.html#num-lt).
 
-To compare strings, use
-[string comparison commands](../ref/builtin.html#str-cmp).
+To compare strings, use string comparison commands like
+[`<s`](../ref/builtin.html#str-lt).
 
 To perform boolean operations, use
 [`and`](../ref/language.html#and-or-coalesce),

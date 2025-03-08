@@ -5,14 +5,16 @@ import (
 	"time"
 
 	"src.elv.sh/pkg/diag"
+	"src.elv.sh/pkg/eval"
 	"src.elv.sh/pkg/parse"
 	"src.elv.sh/pkg/ui"
 )
 
 // Config keeps configuration for highlighting code.
 type Config struct {
-	Check      func(n parse.Tree) error
+	Check      func(n parse.Tree) (string, []*eval.CompilationError)
 	HasCommand func(name string) bool
+	AutofixTip func(autofix string) ui.Text
 }
 
 // Information collected about a command region, used for asynchronous
@@ -22,54 +24,54 @@ type cmdRegion struct {
 	cmd string
 }
 
-// MaxBlockForLate specifies the maximum wait time to block for late results.
-// It can be changed for test cases.
-var MaxBlockForLate = 10 * time.Millisecond
+// Maximum wait time to block for late results. Can be changed for test cases.
+var maxBlockForLate = 10 * time.Millisecond
 
 // Highlights a piece of Elvish code.
-func highlight(code string, cfg Config, lateCb func(ui.Text)) (ui.Text, []error) {
-	var errors []error
+func highlight(code string, cfg Config, lateCb func(ui.Text)) (ui.Text, []ui.Text) {
+	var tips []ui.Text
 	var errorRegions []region
 
-	tree, errParse := parse.Parse(parse.Source{Name: "[tty]", Code: code}, parse.Config{})
-	if errParse != nil {
-		for _, err := range errParse.(*parse.Error).Entries {
-			if err.Context.From != len(code) {
-				errors = append(errors, err)
-				errorRegions = append(errorRegions,
-					region{
-						err.Context.From, err.Context.To,
-						semanticRegion, errorRegion})
-			}
+	addDiagError := func(err error, r diag.Ranging, partial bool) {
+		if partial {
+			return
 		}
+		tips = append(tips, ui.T(err.Error()))
+		errorRegions = append(errorRegions, region{
+			r.From, r.To, semanticRegion, errorRegion})
+	}
+
+	tree, errParse := parse.Parse(parse.Source{Name: "[interactive]", Code: code}, parse.Config{})
+	for _, err := range parse.UnpackErrors(errParse) {
+		addDiagError(err, err.Range(), err.Partial)
 	}
 
 	if cfg.Check != nil {
-		err := cfg.Check(tree)
-		if r, ok := err.(diag.Ranger); ok && r.Range().From != len(code) {
-			errors = append(errors, err)
-			errorRegions = append(errorRegions,
-				region{
-					r.Range().From, r.Range().To, semanticRegion, errorRegion})
+		autofix, diagErrors := cfg.Check(tree)
+		for _, err := range diagErrors {
+			addDiagError(err, err.Range(), err.Partial)
+		}
+		if autofix != "" && cfg.AutofixTip != nil {
+			tips = append(tips, cfg.AutofixTip(autofix))
 		}
 	}
 
 	var text ui.Text
-	regions := getRegionsInner(tree.Root)
+	regions := getRegions(tree.Root)
 	regions = append(regions, errorRegions...)
 	regions = fixRegions(regions)
 	lastEnd := 0
 	var cmdRegions []cmdRegion
 
 	for _, r := range regions {
-		if r.begin > lastEnd {
+		if r.Begin > lastEnd {
 			// Add inter-region text.
-			text = append(text, &ui.Segment{Text: code[lastEnd:r.begin]})
+			text = append(text, &ui.Segment{Text: code[lastEnd:r.Begin]})
 		}
 
-		regionCode := code[r.begin:r.end]
+		regionCode := code[r.Begin:r.End]
 		var styling ui.Styling
-		if r.typ == commandRegion {
+		if r.Type == commandRegion {
 			if cfg.HasCommand != nil {
 				// Do not highlight now, but collect the index of the region and the
 				// segment.
@@ -79,7 +81,7 @@ func highlight(code string, cfg Config, lateCb func(ui.Text)) (ui.Text, []error)
 				styling = stylingForGoodCommand
 			}
 		} else {
-			styling = stylingFor[r.typ]
+			styling = stylingFor[r.Type]
 		}
 		seg := &ui.Segment{Text: regionCode}
 		if styling != nil {
@@ -87,7 +89,7 @@ func highlight(code string, cfg Config, lateCb func(ui.Text)) (ui.Text, []error)
 		}
 
 		text = append(text, seg)
-		lastEnd = r.end
+		lastEnd = r.End
 	}
 	if len(code) > lastEnd {
 		// Add text after the last region as unstyled.
@@ -116,13 +118,13 @@ func highlight(code string, cfg Config, lateCb func(ui.Text)) (ui.Text, []error)
 		// late result to lateCb in another goroutine.
 		select {
 		case late := <-lateCh:
-			return late, errors
-		case <-time.After(MaxBlockForLate):
+			return late, tips
+		case <-time.After(maxBlockForLate):
 			go func() {
 				lateCb(<-lateCh)
 			}()
-			return text, errors
+			return text, tips
 		}
 	}
-	return text, errors
+	return text, tips
 }

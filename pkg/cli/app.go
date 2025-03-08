@@ -130,15 +130,16 @@ func NewApp(spec AppSpec) App {
 	lp.RedrawCb(a.redraw)
 
 	a.codeArea = tk.NewCodeArea(tk.CodeAreaSpec{
-		Bindings:      spec.CodeAreaBindings,
-		Highlighter:   a.Highlighter.Get,
-		Prompt:        a.Prompt.Get,
-		RPrompt:       a.RPrompt.Get,
-		Abbreviations: spec.Abbreviations,
-		QuotePaste:    spec.QuotePaste,
-		OnSubmit:      a.CommitCode,
-		State:         spec.CodeAreaState,
+		Bindings:    spec.CodeAreaBindings,
+		Highlighter: a.Highlighter.Get,
+		Prompt:      a.Prompt.Get,
+		RPrompt:     a.RPrompt.Get,
+		QuotePaste:  spec.QuotePaste,
+		OnSubmit:    a.CommitCode,
+		State:       spec.CodeAreaState,
 
+		SimpleAbbreviations:    spec.SimpleAbbreviations,
+		CommandAbbreviations:   spec.CommandAbbreviations,
 		SmallWordAbbreviations: spec.SmallWordAbbreviations,
 	})
 
@@ -225,7 +226,12 @@ func (a *app) handle(e event) {
 		target := a.ActiveWidget()
 		handled := target.Handle(e)
 		if !handled {
-			a.GlobalBindings.Handle(target, e)
+			handled = a.GlobalBindings.Handle(target, e)
+		}
+		if !handled {
+			if k, ok := e.(term.KeyEvent); ok {
+				a.Notify(ui.T("Unbound key: " + ui.Key(k).String()))
+			}
 		}
 		if !a.loop.HasReturned() {
 			a.triggerPrompts(false)
@@ -254,42 +260,44 @@ func (a *app) redraw(flag redrawFlag) {
 		addons = append([]tk.Widget(nil), s.Addons...)
 	})
 
-	bufNotes := renderNotes(notes, width)
+	mergedNotes := mergeNotes(notes)
 	isFinalRedraw := flag&finalRedraw != 0
 	if isFinalRedraw {
 		hideRPrompt := !a.RPromptPersistent()
-		if hideRPrompt {
-			a.codeArea.MutateState(func(s *tk.CodeAreaState) { s.HideRPrompt = true })
-		}
+		a.codeArea.MutateState(func(s *tk.CodeAreaState) {
+			s.HideTips = true
+			s.HideRPrompt = hideRPrompt
+		})
 		bufMain := renderApp([]tk.Widget{a.codeArea /* no addon */}, width, height)
-		if hideRPrompt {
-			a.codeArea.MutateState(func(s *tk.CodeAreaState) { s.HideRPrompt = false })
-		}
-		// Insert a newline after the buffer and position the cursor there.
-		bufMain.Extend(term.NewBuffer(width), true)
+		a.codeArea.MutateState(func(s *tk.CodeAreaState) {
+			s.HideTips = false
+			s.HideRPrompt = false
+		})
+		// Insert a newline after the buffer and position the cursor there. Do
+		// this with a Buffer that has one empty line.
+		bufMain.ExtendDown(&term.Buffer{Lines: [][]term.Cell{nil}}, true)
 
-		a.TTY.UpdateBuffer(bufNotes, bufMain, flag&fullRedraw != 0)
+		a.TTY.UpdateBuffer(mergedNotes, bufMain, flag&fullRedraw != 0)
 		a.TTY.ResetBuffer()
 	} else {
 		bufMain := renderApp(append([]tk.Widget{a.codeArea}, addons...), width, height)
-		a.TTY.UpdateBuffer(bufNotes, bufMain, flag&fullRedraw != 0)
+		a.TTY.UpdateBuffer(mergedNotes, bufMain, flag&fullRedraw != 0)
 	}
 }
 
-// Renders notes. This does not respect height so that overflow notes end up in
-// the scrollback buffer.
-func renderNotes(notes []ui.Text, width int) *term.Buffer {
+// Merges notes, separating them with newlines.
+func mergeNotes(notes []ui.Text) ui.Text {
 	if len(notes) == 0 {
 		return nil
 	}
-	bb := term.NewBufferBuilder(width)
+	tb := new(ui.TextBuilder)
 	for i, note := range notes {
 		if i > 0 {
-			bb.Newline()
+			tb.WriteText(ui.T("\n"))
 		}
-		bb.WriteStyled(note)
+		tb.WriteText(note)
 	}
-	return bb.Buffer()
+	return tb.Text()
 }
 
 // Renders the codearea, and uses the rest of the height for the listing.
@@ -304,7 +312,7 @@ func renderApp(widgets []tk.Widget, width, height int) *term.Buffer {
 		if buf == nil {
 			buf = buf2
 		} else {
-			buf.Extend(buf2, i == focus)
+			buf.ExtendDown(buf2, i == focus)
 		}
 	}
 	return buf
@@ -349,7 +357,7 @@ func distributeHeight(widgets []tk.Widget, width, height int) ([]int, int) {
 	//
 	// 1. If maxHeights[u] > maxHeights[v], heights[u] >= heights[v];
 	//
-	// 2. While achieving goal 1, have as many widgets u s.t. heights[u] ==
+	// 2. While achieving goal 1, have as many widgets s.t. heights[u] ==
 	//    maxHeights[u].
 	//
 	// This is done by allocating the height among the widgets following an
@@ -361,6 +369,8 @@ func distributeHeight(widgets []tk.Widget, width, height int) ([]int, int) {
 	// - If not, allocate the remaining budget evenly - rounding down at each
 	//   step, so the widgets with smaller maxHeights gets smaller heights.
 
+	// TODO: Add a test for this.
+
 	indices := make([]int, n)
 	for i := range indices {
 		indices[i] = i
@@ -371,7 +381,7 @@ func distributeHeight(widgets []tk.Widget, width, height int) ([]int, int) {
 
 	remain := height
 	for rank, idx := range indices {
-		if remain >= maxHeights[idx] {
+		if remain >= maxHeights[idx]*(n-rank) {
 			heights[idx] = maxHeights[idx]
 		} else {
 			heights[idx] = remain / (n - rank)
@@ -382,7 +392,7 @@ func distributeHeight(widgets []tk.Widget, width, height int) ([]int, int) {
 	return heights, focus
 }
 
-func hasFocus(w interface{}) bool {
+func hasFocus(w any) bool {
 	if f, ok := w.(interface{ Focus() bool }); ok {
 		return f.Focus()
 	}

@@ -48,26 +48,41 @@ A **whitespace** is any of the following:
 The following **metacharacters** serve to introduce or delimit syntax
 constructs:
 
-| Metacharacter | Use                                                         |
-| ------------- | ----------------------------------------------------------- |
-| `$`           | Referencing variables                                       |
-| `*` and `?`   | Forming wildcard                                            |
-| `\|`          | Separating forms in a pipeline                              |
-| `&`           | Marking background pipelines; introducing key-value pairs   |
-| `;`           | Separating pipelines                                        |
-| `<` and `>`   | Introducing IO redirections                                 |
-| `(` and `)`   | Enclosing output captures                                   |
-| `[` and `]`   | Enclosing list literals, map literals or function signature |
-| `{` and `}`   | Enclosing lambda literals or brace expressions              |
+-   `$`: introduces [variable use](#variable-use)
+
+-   `*` and `?`: forms [wildcards](#wildcard-expansion)
+
+-   `(` and `)`: encloses [output captures](#output-capture)
+
+-   `[` and `]`: encloses [list](#list) or [map](#map) literals
+
+-   `{` and `}`: encloses [lambda literals](#function) or
+    [braced lists](#braced-list)
+
+-   `<` and `>`: introduces [IO redirections](#redirection)
+
+-   `;`: separates pipelines in a [code chunk](#code-chunk)
+
+-   `|`: separates forms in a [pipeline](#pipeline); encloses
+    [function](#function) signature
+
+-   `&`: marks [background pipelines](#background-pipeline); introduces
+    key-value pairs in [map literals](#map), [options](#ordinary-command), or
+    [function](#function) signatures
 
 The following characters are parsed as metacharacters under certain conditions:
 
--   `~` is a metacharacter if it appears at the beginning of a compound
-    expression, in which case it is subject to
-    [tilde expansion](#tilde-expansion);
+-   `~`: introduces [tilde expansion](#tilde-expansion) if appearing at the
+    beginning of a compound expression
 
--   `=` is a metacharacter when used for terminating [map keys](#map) or option
-    keys, or denoting or [temporary assignments](#temporary-assignment).
+    **Note**: Not technically a metacharacter in this context, `~` is also used
+    as a [variable suffix](#variable-suffix) to indicate variables for commands.
+
+-   `=`: terminates [map keys](#map) and command option keys.
+
+**Note**: `:` is not technically a metacharacter, but is used in
+[qualified variable names](#qualified-name) and works as a
+[variable suffix](#variable-suffix) for namespaces.
 
 ## Single-quoted string
 
@@ -109,6 +124,8 @@ represents Unicode codepoints in hexadecimal):
 
     -   `\r` is U+000D CR (carriage return).
 
+    -   `\e` is U+001B ESC (escape).
+
     -   `\"` is U+0022, the double quote `"` itself.
 
     -   `\\` is U+005C, the backslash `\` itself.
@@ -126,8 +143,8 @@ represents Unicode codepoints in hexadecimal):
     be used to write arbitrary byte sequences that are not necessary valid UTF-8
     sequences.
 
-    **Note**: `\0`, while supported by C, is invalid in Elvish; write `\000`
-    instead.
+    **Note**: `\0`, while supported by C, is invalid in Elvish; write `\x00` or
+    `\000` instead.
 
 -   The following escape sequences encode any Unicode codepoint using their
     numeric values:
@@ -149,7 +166,7 @@ represents Unicode codepoints in hexadecimal):
 
     -   `\^?` represents DEL (U+007F).
 
-    -   `\c` followed by character _X_ is equivalent to `\^` followed by _X_.
+    -   `\c` followed by character *X* is equivalent to `\^` followed by *X*.
 
 An unsupported escape sequence results in a parse error.
 
@@ -215,7 +232,7 @@ string that parses to a number. Examples:
 
 -   In the string `世界`, each codepoint is encoded with three bytes. The first
     codepoint occupies byte 0 through 2, and the second occupies byte 3 through
-    5\. Hence valid indices are 0 and 3:
+    5. Hence valid indices are 0 and 3:
 
     ```elvish-transcript
     ~> put 世界[0]
@@ -414,21 +431,18 @@ not have to follow whitespaces; `[&a=lorem&b=ipsum]` is equivalent to
 
 ## Pseudo-map
 
-A pseudo-map is not a single concrete data type. It refers to concrete types
-that behave like maps with some restrictions.
+A pseudo-map is not a single concrete data type. It refers to values that can be
+[indexed](#indexing) like maps, but do not support the full range of map
+operations.
 
-A pseudo-map has a fixed set of keys whose values can be accessed by
-[indexing](#indexing) like you would for a regular [map](#map). Similarly, you
-can use commands like [`keys`](./builtin.html#keys) and
-[`has-key`](./builtin.html#keys) on such objects.
+Pseudo-maps are usually values with special semantics in the Elvish runtime. The
+key-value pairs provide useful data about the value, but do not constitute the
+entirety of the value. Some examples of pseudo-maps are [exceptions](#exception)
+and [user-defined functions](#function).
 
-Unlike a normal map, it is currently not possible to create a modified version
-of an existing pseudo-map: it is not possible to create a pseudo-map with new
-keys, without existing keys, or with a different value for a given key.
-
-The pseudo-map mechanism is often used for introspection. For example,
-[exceptions](#exception), [user-defined functions](#function), and
-[`$buildinfo`](./builtin.html#buildinfo) are pseudo-maps.
+Pseudo-maps are printed like maps, but with a `^tag` immediately after the `[`,
+like `[^tag &key=value]`. This notation is a placeholder and is not valid syntax
+for constructing pseudo-map values.
 
 ## Nil
 
@@ -452,9 +466,9 @@ There is no literal syntax for exceptions. See the discussion of
 [exception and flow commands](#exception-and-flow-commands) for more information
 about this data type.
 
-An exception is a [pseudo-map](#pseudo-map) with a `reason` field, which is in
-turn a pseudo-map. The reason pseudo-map has has a `type` field identifying how
-the exception was raised, and further fields depending on the type:
+An exception is a [pseudo-map](#pseudo-map) with a `reason` field, which in turn
+is also a pseudo-map in many cases, with a `type` field identifying how the
+exception was raised, and further fields depending on the type:
 
 -   If the `type` field is `fail`, the exception was raised by the
     [fail](builtin.html#fail) command.
@@ -505,6 +519,9 @@ the exception was raised, and further fields depending on the type:
 
     -   The `trap-cause` field contains the number indicating the trap cause.
 
+This list is not exhaustive, though. There are many error conditions that result
+in an opaque `reason` value that doesn't support introspection yet.
+
 Examples:
 
 ```elvish-transcript
@@ -515,6 +532,13 @@ Examples:
 ~> put ?(false)[reason]
 ▶ [&cmd-name=false &exit-status=1 &pid=953421 &type=external-cmd/exited]
 ```
+
+Exceptions also carry stack traces. They are currently opaque values with no
+meaningful access methods yet, and will appear as `&stack-trace=<...>` when
+printing an exception value.
+
+When comparing whether two exceptions have the same cause, you should compare
+their reason fields (like `eq $e1[reason] $e2[reason]`).
 
 ## File
 
@@ -628,7 +652,8 @@ user-defined function, it has the following fields:
 -   `$f[rest-arg]` is the index of the rest argument. If there is no rest
     argument, it is `-1`.
 
--   `$f[opt-names]` is a list containing the names of the options.
+-   `$f[opt-names]` is a list containing the names of the options, in the order
+    they are defined in the source code.
 
 -   `$f[opt-defaults]` is a list containing the default values of the options,
     in the same order as `$f[opt-names]`.
@@ -663,10 +688,11 @@ or part of an expression.
 
 **Note**: In most other shells, variables can map directly to environmental
 variables: `$PATH` is the same as the `PATH` environment variable. This is not
-the case in Elvish. Instead, environment variables are put in a dedicated `E:`
-namespace; the environment variable `PATH` is known as `$E:PATH`. The `$PATH`
-variable, on the other hand, does not exist initially, and if you have defined
-it, only lives in a certain lexical scope within the Elvish interpreter.
+the case in Elvish. Instead, environment variables are put in a dedicated
+[`E:` namespace](#special-namespaces); the environment variable `PATH` is known
+as `$E:PATH`. The `$PATH` variable, on the other hand, does not exist initially,
+and if you have defined it, only lives in a certain lexical scope within the
+Elvish interpreter.
 
 You will notice that variables sometimes have a leading dollar `$`, and
 sometimes not. The tradition is that they do when they are used for their
@@ -678,13 +704,18 @@ other shells.
 There are two characters that have special meanings and extra type constraints
 when used as the suffix of a variable name:
 
--   If a variable name ends with `~`, it can only take callable values, which
-    are functions and external commands. Such variables are consulted when
-    resolving [ordinary commands](#ordinary-command). The default value is the
+-   If a variable name ends with `~`, it can only take *callable* values, which
+    are functions and external commands. The default value is equivalent to the
     builtin [`nop`](builtin.html#nop) command.
 
+    Such variables are consulted when resolving
+    [ordinary commands](#ordinary-command) (for example, `foo` calls `$foo~`;
+    see there for details).
+
 -   If a variable name ends with `:`, it can only take namespaces as values.
-    They are used for accessing namespaced variables.
+
+    Such variables are consulted when evaluating variables with
+    [qualified names](#qualified-name).
 
 ## Scoping rule
 
@@ -717,7 +748,7 @@ Compilation error: variable $nonexistent not found
 ```
 
 Note that Elvish resolves all variables in a code chunk before starting to
-execute any of it; that is why the error message above says _compilation error_.
+execute any of it; that is why the error message above says *compilation error*.
 This can be more clearly observed in the following example:
 
 ```elvish-transcript
@@ -726,12 +757,27 @@ Compilation error: variable $nonexistent not found
 [tty], line 1: echo pre-error; echo $nonexistent
 ```
 
+## Qualified name
+
+If a variable name contains a non-final `:`, it is called a **qualified name**
+and points to a variable in a namespace. (A final `:` is considered a
+[variable suffix](#variable-suffix) and such variables hold the namespaces
+themselves.)
+
+A qualified name is split after each non-final `:`, with the `:` attached to the
+component to the left. The first component is resolved like a normal variable,
+and subsequent components function like [indexing](#indexing). For example,
+`$a:b:c` is equivalent to `$a:[b:][c]`.
+
+**Note**: In future, namespace access may be subject to more static checking
+compared to indexing access.
+
 ## Closure semantics
 
 When a function literal refers to a variable in an outer scope, the function
 will keep that variable alive, even if that variable is the local variable of an
-outer function that that function has returned. This is called
-[closure semantics](<https://en.wikipedia.org/wiki/Closure_(computer_programming)>),
+outer function that function has returned. This is called
+[closure semantics](https://en.wikipedia.org/wiki/Closure_(computer_programming)),
 because the function literal "closes" over the environment it is defined in.
 
 In the following example, the `make-adder` function outputs two functions, both
@@ -761,7 +807,9 @@ referring to a local variable `$n`. Closure semantics means that:
 ▶ 1
 ```
 
-Variables that get "captured" in closures are called **upvalues**;. When
+### Upvalues
+
+Variables that get "captured" in closures are called **upvalues**. When
 capturing upvalues, Elvish only captures the variables that are used. In the
 following example, `$m` is not an upvalue of `$g` because it is not used:
 
@@ -770,7 +818,8 @@ following example, `$m` is not an upvalue of `$g` because it is not used:
 ~> var g = (f)
 ```
 
-**Note**: This effect has impacts on the [`eval`](builtin.html#eval) command.
+**Note**: The effect of this behavior is usually not noticeable, but has impacts
+on the [`eval`](builtin.html#eval) command.
 
 # Expressions
 
@@ -858,10 +907,24 @@ the variable:
 ▶ bar
 ```
 
+Exploding a string results in substrings, each containing an individual
+codepoints (equivalent to calling [`str:split`](str.html#str:split) with an
+empty separator):
+
+```elvish-transcript
+~> var s = 'Hi 世界'
+~> put $@s
+▶ H
+▶ i
+▶ ' '
+▶ 世
+▶ 界
+```
+
 **Note**: Since variable uses have higher precedence than [indexing](#indexing),
 this does not work for exploding a list that is an element of another list. For
 doing that, and exploding the result of other expressions (such as an output
-capture), use the builtin [all](builtin.html#all) command.)
+capture), use the builtin [all](builtin.html#all) command.
 
 ## Output capture
 
@@ -903,10 +966,10 @@ makes `\r\n` also valid line separators:
 ▶ b
 ```
 
-**Note 1**. Only the last newline is ever removed, so empty lines are preserved;
+**Note**: Only the last newline is ever removed, so empty lines are preserved;
 `(echo "a\n")` evaluates to two values, `"a"` and `""`.
 
-**Note 2**. One consequence of this mechanism is that you can not distinguish
+**Note**: One consequence of this mechanism is that you can not distinguish
 outputs that lack a trailing newline from outputs that have one; `(echo what)`
 evaluates to the same value as `(print what)`. If such a distinction is needed,
 use [`slurp`](builtin.html#slurp) to preserve the original bytes output.
@@ -924,6 +987,10 @@ and byte output might not agree with the order in which they happened:
 **Note**: If you want to capture the stdout and stderr byte streams independent
 of each other, see the example in the
 [run-parallel](./builtin.html#run-parallel) documentation.
+
+**Note**: Output capture expressions do not introduce new scopes. For example,
+`nop (var x = foo)` will leave the variable `$x` defined. To introduce a new
+scope, wrap the code inside a [lambda](#function), e.g. `nop ({ var x = foo })`.
 
 ## Exception capture
 
@@ -961,7 +1028,7 @@ if ?(test -d ./a) {
 combine output capture and exception capture:
 
 ```elvish
-var output = (var error = ?(commands-that-may-fail))
+var output = (var error = ?(put foo; fail bad))
 ```
 
 ## Braced list
@@ -1073,6 +1140,21 @@ of all the constituent expressions. Examples:
 ~> var v = value
 ~> put '$v is '$v # compounding one string literal with one string variable
 ▶ '$v is value'
+```
+
+Among the types provided by the language, numbers are implicitly converted to
+strings in a compound expression, but other types require explicit conversions:
+
+```elvish-transcript
+~> var n = (num 10)
+~> var l = [a b c]
+~> echo 'Number: '$n
+Number: 10
+~> echo 'List: '$l
+Exception: cannot concatenate string and list
+[tty 18]:1:6: echo 'List: '$l
+~> echo 'List: '(repr $l)
+List: [a b c]
 ```
 
 When one or more of the constituent expressions evaluate to multiple values, the
@@ -1199,6 +1281,8 @@ wildcard:
 
     -   `regular` will match if the path is a regular file.
 
+    Symbolic links are considered to be regular files.
+
 Although global modifiers affect the entire wildcard pattern, you can add it
 after any wildcard, and the effect is the same. For example,
 `put */*[nomatch-ok].cpp` and `put *[nomatch-ok]/*.cpp` do the same thing. On
@@ -1245,6 +1329,11 @@ Note the following caveats:
 -   Likewise, you always need to use `**` to match slashes, even if the matcher
     includes `/`. For example `*[set:abc/]` is the same as `*[set:abc]`.
 
+Files that the Elvish runtime doesn't have appropriate access to are omitted
+silently. For example, if the runtime doesn't have appropriate access to either
+the `d` directory or the `d/y.cc` file, the result of `*/y.cc` may omit
+`d/y.cc`.
+
 ## Order of evaluation
 
 An expression can use a combination of indexing, tilde expansion, wildcard and
@@ -1268,7 +1357,7 @@ expression is evaluated as follows:
 
 1.  The variable use `$li` evaluates to the list `[foo bar]`.
 
-2.  The indexing expression `$li[0]` evaluates to two strings `foo` and `bar`.
+2.  The indexing expression `$li[0 1]` evaluates to two strings `foo` and `bar`.
 
 3.  Compounding the expression, the result is `~/foo/*` and `~/bar/*`.
 
@@ -1305,9 +1394,14 @@ arguments and options.
 The first expression in an ordinary command is the command **head**. If the head
 is a single string literal, it is subject to **static resolution**:
 
--   If a variable with name `head~` (where `head` is the value of the head)
-    exists, the head will evaluate as if it is `$head~`; i.e., a function
-    invocation.
+-   If the variable `$head~` (where `head` is the value of the head) exists, it
+    resolves to that variable.
+
+    **Note**: Builtin commands and functions defined with [`fn`](#fn) are in
+    fact variables ending with `~`. For example, the [`put`](builtin.html#put)
+    command is stored in the `$put~` variable, and this mechanism allows you to
+    call it as just `put`. Conversely, defining a variable like
+    `var foo~ = { ... }` enables you to call it as either `$foo~` or `foo`.
 
 -   If the head contains at least one slash, it is treated as an external
     command with the value as its path relative to the current directory.
@@ -1322,15 +1416,6 @@ is a single string literal, it is subject to **static resolution**:
     -   If the `unknown-command` pragma is set to `disallow`, such command heads
         trigger a compilation error.
 
-If the head is not a single string literal, it is evaluated as a normal
-expression. The expression must evaluate to one value, and the value must be one
-of the following:
-
--   A callable value: a function or external command.
-
--   A string containing at least one slash, in which case it is treated like an
-    external command with the string value as its path.
-
 Examples of commands using static resolution:
 
 ```elvish-transcript
@@ -1342,6 +1427,15 @@ Examples of commands using static resolution:
 ~> whoami # resolves to external command whoami
 elf
 ```
+
+If the head is not a single string literal, it is evaluated as a normal
+expression. The expression must evaluate to one value, and the value must be one
+of the following:
+
+-   A callable value: a function or external command.
+
+-   A string containing at least one slash, in which case it is treated like an
+    external command with the string value as its path.
 
 Examples of commands using a dynamic callable head:
 
@@ -1414,63 +1508,6 @@ A **special command** form has the same syntax with an ordinary command, but how
 it is executed depends on the command head. See
 [special commands](#special-commands).
 
-## Temporary assignment
-
-**Note**: Starting from 0.18.0, this syntax will be deprecated in favor of the
-[`tmp`](#tmp) special command.
-
-You can prepend any command form with **temporary assignments**, which gives
-variables temporarily values during the execution of that command.
-
-In the following example, `$x` and `$y` are temporarily assigned 100 and 200:
-
-```elvish-transcript
-~> var x y = 1 2
-~> x=100 y=200 + $x $y
-▶ 300
-~> echo $x $y
-1 2
-```
-
-In contrary to normal assignments, there should be no whitespaces around the
-equal sign `=`. To have multiple variables in the left-hand side, use braces:
-
-```elvish-transcript
-~> var x y = 1 2
-~> fn f { put 100 200 }
-~> {x,y}=(f) + $x $y
-▶ 300
-```
-
-If you use a previously undefined variable in a temporary assignment, its value
-will become the empty string after the command finishes.
-
-Since `var` and `set` are also commands, they can also be prepended with
-temporary assignments:
-
-```elvish-transcript
-~> var x = 1
-~> x=100 var y = (+ 133 $x)
-~> put $x $y
-▶ 1
-▶ 233
-```
-
-Temporary assignments must all appear at the beginning of the command form. As
-soon as something that is not a temporary assignments is parsed, Elvish no
-longer parses temporary assignments. For instance, in `x=1 echo x=1`, the second
-`x=1` is not a temporary assignment, but a bareword.
-
-**Note**: Elvish's behavior differs from bash (or zsh) in one important place.
-In bash, temporary assignments to variables do not affect their direct
-appearance in the command:
-
-```sh-transcript
-bash-4.4$ x=1
-bash-4.4$ x=100 echo $x
-1
-```
-
 ## IO ports
 
 A command have access to a number of **IO ports**. Each IO port is identified by
@@ -1499,7 +1536,7 @@ initialized with special values:
 -   The value channels for port 1 and 2 are special channels that forward the
     values written to them to their file counterparts. Each value is put on a
     separate line, with a prefix controlled by
-    [`$value-out-indicator`](builtin.html#value-out-indicator). The default
+    [`$value-out-indicator`](builtin.html#$value-out-indicator). The default
     prefix is `▶` followed by a space.
 
 When running an external command, the file object from each port is used to
@@ -1511,40 +1548,55 @@ IO ports can be modified with [redirections](#redirection) or by
 
 ## Redirection
 
-<!-- TODO: Describe the syntax and behavior more formally. -->
+A **redirection** modifies the IO ports a command operate with. It consists of
+three parts:
 
-A **redirection** modifies the IO ports a command operate with. There are
-several variants.
-
-A **file redirection** opens a file and associates it with an IO port. The
-syntax consists of an optional destination IO port (like `2`), a redirection
-operator (like `>`) and a filename (like `error.log`):
-
--   The **destination IO port** determines which IO port to modify. It can be
-    given either as the number of the IO port, or one of `stdin`, `stdout` and
+-   The **destination port** determines which IO port to modify. It can be given
+    either as the number of the IO port, or one of `stdin`, `stdout` and
     `stderr`, which are equivalent to 0, 1 and 2 respectively.
 
-    The destination IO port can be omitted, in which case it is inferred from
-    the redirection operator.
+    The destination can be omitted, in which case it is inferred from the
+    operator.
 
-    When the destination IO port is given, it must precede the redirection
-    operator directly, without whitespaces in between; if there are whitespaces,
-    otherwise Elvish will parse it as an argument instead.
+    When the destination is given, it must precede the operator directly,
+    without whitespaces in between. If there are whitespaces, Elvish will parse
+    it as an argument instead.
 
--   The **redirection operator** determines the mode to open the file, and the
-    destination IO port if it is not explicitly specified.
+-   The **operator** determines the mode to open files (if the source is a
+    filename), and the destination if it is not explicitly specified.
 
--   The **filename** names the file to open.
+    Possible redirection operators and their default destination ports are:
 
-Possible redirection operators and their default FDs are:
+    -   `<` for reading. The default IO port is 0 (stdin).
 
--   `<` for reading. The default IO port is 0 (stdin).
+    -   `>` for writing. The default IO port is 1 (stdout).
 
--   `>` for writing. The default IO port is 1 (stdout).
+    -   `>>` for appending. The default IO port is 1 (stdout).
 
--   `>>` for appending. The default IO port is 1 (stdout).
+    -   `<>` for reading and writing. The default IO port is 1 (stdout).
 
--   `<>` for reading and writing. The default IO port is 1 (stdout).
+-   The **source** can be one of the following:
+
+    -   A filename, in which case Elvish will open the named file to use for the
+        destination port, using a suitable mode determined by the operator.
+
+    -   A file object, in which case it is used for the destination port.
+
+    -   A map, which works with one of two operators:
+
+        -   If the operator is `<`, the map must contain a file object in the
+            `r` field, and that file is used as the redirection source.
+
+        -   If the operator is `>`, the map must contain a file object in the
+            `w` field, and that file is used as the redirection source.
+
+        -   Other operators can't be used with maps.
+
+    -   The special syntax `&src` (where `src` is a number, or any of `stdin`,
+        `stdout` and `stderr`) means duplicating the `src` port to the
+        destination port.
+
+    -   The special syntax `&-` means closing the destination port.
 
 Examples:
 
@@ -1564,8 +1616,20 @@ Traceback:
 Try '/bin/ls --help' for more information.
 ```
 
-IO ports modified by file redirections do not support value channels. To be more
-exact:
+Examples for duplicating and closing ports:
+
+```elvish-transcript
+~> date >&-
+date: stdout: Bad file descriptor
+Exception: date exited with 1
+[tty 3], line 1: date >&-
+~> put foo >&-
+Exception: port does not support value output
+[tty 37], line 1: put foo >&-
+```
+
+IO ports modified by file redirections do not currently support value channels.
+To be more exact:
 
 -   A file redirection using `<` sets the value channel to one that never
     produces any values.
@@ -1584,22 +1648,6 @@ Exception: port has no value output
 ~> # previous command produced nothing
 ```
 
-Redirections can also be used for closing or duplicating IO ports. Instead of
-writing a filename, use `&fd` (where `fd` is a number, or any of `stdin`,
-`stdout` and `stderr`) for duplicating, or `&-` for closing. In this case, the
-redirection operator only determines the default destination FD (and is totally
-irrevelant if a destination IO port is specified). Examples:
-
-```elvish-transcript
-~> date >&-
-date: stdout: Bad file descriptor
-Exception: date exited with 1
-[tty 3], line 1: date >&-
-~> put foo >&-
-Exception: port has no value output
-[tty 37], line 1: put foo >&-
-```
-
 If you have multiple related redirections, they are applied in the order they
 appear. For instance:
 
@@ -1611,8 +1659,8 @@ out
 err
 ```
 
-Redirections may appear anywhere in the command, except at the beginning, (this
-may be restricted in future). It's usually good style to write redirections at
+Redirections may appear anywhere in the command, except at the beginning; this
+may be restricted in future. It's usually good style to write redirections at
 the end of command forms.
 
 # Special commands
@@ -1634,6 +1682,34 @@ the custom evaluation rule of `or`, the rest of the arguments are not evaluated.
 If `or` were a normal command, the code above is still syntactically correct.
 However, Elvish would then evaluate all its arguments, with the side effect of
 outputting `x`, `y` and `z`, before calling `or`.
+
+**Note**: Since special commands are parsed like normal commands, they end at
+newlines; this is especially important for control flow commands. For example,
+the following two styles of writing an `if` are valid:
+
+```elvish
+# No newline at all
+if (...) { ... } else { ... }
+
+# Newline appears within lambdas, which don't end the outer command
+if (...) {
+  ...
+} else {
+  ...
+}
+```
+
+However, the following style is **not** valid:
+
+```elvish
+# The if command ends at the newline
+if (...) { ... }
+# And this is treated as a separate command
+else { ... }
+```
+
+The `else` keyword is technically just an argument of the `if` command, not a
+standalone command. This is different from POSIX shell's syntax.
 
 ## Declaring variables: `var` {#var}
 
@@ -1666,7 +1742,7 @@ function as a rest variable.
 
 When declaring a variable that already exists, the existing variable is
 shadowed. The shadowed variable may still be accessed indirectly if it is
-referenced by a function. Example:
+previously referenced by a function. Example:
 
 ```elvish-transcript
 ~> var x = old
@@ -1676,6 +1752,16 @@ referenced by a function. Example:
 ▶ new
 ~> f
 ▶ old
+```
+
+If the right-hand-side of the `var` command references the variable being
+shadowed, it sees the old variable:
+
+```elvish-transcript
+~> var x = foo
+~> var x = [$x] # $x in RHS refers to old $x
+~> put $x
+▶ [foo]
 ```
 
 ## Assigning variables or elements: `set` {#set}
@@ -1769,7 +1855,7 @@ mutation applied, and assigns it to the variable. Example:
 ▶ [foo bar]
 ```
 
-## Temporarily assigning variables or elements: `tmp` {#tmp}
+## Assign temporarily: `tmp` {#tmp}
 
 The `tmp` command has the same syntax as [`set`](#set), and also requires all
 variables to already exist (use the [`var`](#var) special command to declare new
@@ -1791,6 +1877,42 @@ bar
 ~> f
 foo
 ```
+
+## Run with temporary assignment: `with` {#with}
+
+(Added in the 0.21 release series.)
+
+The `with` command has a similar syntax to [`set`](#set), but takes an
+additional lambda. It performs assignments, runs the lambda, and restores the
+variables to their original values. Example:
+
+```elvish-transcript
+~> var x = old
+~> with x = new { echo $x }
+new
+~> echo $x
+old
+```
+
+The `with` command also supports an alternative syntax where all assignment
+arguments are enclosed inside `[` and `]`. There can be multiple of them:
+
+```elvish-transcript
+~> var x y = old-x old-y
+~> with [x = new-x] [y = new-y] { echo $x $y }
+new-x new-y
+```
+
+The same temporary assignment logic can usually be expressed with both `tmp` and
+`with`. For examples, the following are equivalent:
+
+```elvish-transcript
+~> var x = old
+~> { tmp x = new; echo $x }
+~> with x = new { echo $x }
+```
+
+Whether to use `tmp` or `with` is often a matter of style.
 
 ## Deleting variables or elements: `del` {#del}
 
@@ -1919,10 +2041,11 @@ The condition part is an expression, not a command like in other shells.
 Example:
 
 ```elvish
+use str
 fn tell-language {|fname|
-    if (has-suffix $fname .go) {
+    if (str:has-suffix $fname .go) {
         echo $fname" is a Go file!"
-    } elif (has-suffix $fname .c) {
+    } elif (str:has-suffix $fname .c) {
         echo $fname" is a C file!"
     } else {
         echo $fname" is a mysterious file!"
@@ -1954,6 +2077,10 @@ if ?(test -d .git) {
 However, for Elvish's builtin predicates that output values instead of throw
 exceptions, the output capture construct `()` should be used.
 
+**Note**: The `if` command itself doesn't introduce a new scope. For example,
+`if (var x = foo; put $x) { }` will leave the variable `$x` defined. However,
+the body blocks introduce new scopes because they are [lambdas](#function).
+
 ## Conditional loop: `while` {#while}
 
 Syntax:
@@ -1970,6 +2097,10 @@ Execute the body as long as the condition evaluates to a booleanly true value.
 
 The else body, if present, is executed if the body has never been executed (i.e.
 the condition evaluates to a booleanly false value in the very beginning).
+
+**Note**: The `while` command itself doesn't introduce a new scope. For example,
+`while (var x = foo; put $x) { }` will leave the variable `$x` defined. However,
+the body blocks introduce new scopes because they are [lambdas](#function).
 
 ## Iterative loop: `for` {#for}
 
@@ -1992,15 +2123,15 @@ the iteration value has no elements).
 ## Exception control: `try` {#try}
 
 (If you just want to capture the exception, you can use the more concise
-exception capture construct `?()` instead.)
+[exception capture construct](#exception-capture) `?()` instead.)
 
 Syntax:
 
 ```elvish-transcript
 try {
     <try-block>
-} except except-varname {
-    <except-block>
+} catch exception-var {
+    <catch-block>
 } else {
     <else-block>
 } finally {
@@ -2008,36 +2139,49 @@ try {
 }
 ```
 
-Only `try` and `try-block` are required. This control structure behaves as
-follows:
+This control structure behaves as follows:
 
 1.  The `try-block` is always executed first.
 
-2.  If `except` is present and an exception occurs in `try-block`, it is caught
-    and stored in `except-varname`, and `except-block` is then executed.
-    Example:
+2.  If `catch` is present, any exception that occurs in `try-block` is caught
+    and stored in `exception-var`, and `catch-block` is then executed. Example:
 
     ```elvish-transcript
-    ~> try { fail bad } except e { put $e }
-    ▶ ?(fail bad)
+    ~> try { fail bad } catch e { put $e[reason] }
+    ▶ [^fail-error &content=bad &type=fail]
     ```
 
-    Note that if `except` is not present, exceptions thrown from `try` are not
-    caught: for instance, `try { fail bad }` throws `bad`; it is equivalent to a
-    plain `fail bad`.
+    If `catch` is not present, exceptions thrown from `try` are not caught: for
+    instance, `try { fail bad } finally { echo foo }` will echo `foo`, but the
+    exception is not caught and will be propagated further.
 
-    Note that the word after `except` names a variable, not a matching
-    condition. Exception matching is not supported yet. For instance, you may
-    want to only match exceptions that were created with `fail bad` with
-    `except bad`, but in fact this creates a variable `$bad` that contains
-    whatever exception was thrown.
+    **Note**: this keyword is spelt `except` in Elvish 0.17.x and before, but is
+    otherwise the same. Using `except` still works in Elvish 0.18.x but is
+    deprecated; it will be removed in Elvish 0.19.0.
+
+    **Note**: the word after `catch` names a variable, not a matching condition.
+    Exception matching is not supported yet. For instance, you may want to only
+    match exceptions that were created with `fail bad` with `except bad`, but in
+    fact this creates a variable `$bad` that contains whatever exception was
+    thrown.
 
 3.  If no exception occurs and `else` is present, `else-block` is executed.
-    Example:
+    Examples:
+
+    ```elvish-transcript
+    ~> try { fail bad } catch e { echo $e[reason] } else { echo good }
+    [^fail-error &content=bad &type=fail]
+    ~> try { nop } catch e { echo $e[reason] } else { echo good }
+    good
+    ```
+
+    Using `else` requires a `catch` to be present. The following code is
+    invalid:
 
     ```elvish-transcript
     ~> try { nop } else { echo well }
-    well
+    Compilation error: try with an else block requires a catch block
+      [tty 1]:1:1-30: try { nop } else { echo well }
     ```
 
 4.  If `finally-block` is present, it is executed. Examples:
@@ -2054,24 +2198,39 @@ follows:
     final
     ```
 
-5.  If the exception was not caught (i.e. `except` is not present), it is
+5.  If the exception was not caught (that is, `catch` is not present), it is
     rethrown.
 
+At least one of `catch` and `finally` must be present: a lone `try { ... }` does
+not do anything on its own, and is almost certainly a mistake. To swallow
+exceptions, an explicit `catch` clause must be given.
+
+More examples with all possible clauses present:
+
+```elvish-transcript
+~> try { nop } catch e { put $e[reason] } else { put good } finally { put final }
+▶ good
+▶ final
+~> try { fail bad } catch e { put $e[reason] } else { put good } finally { put final }
+▶ [^fail-error &content=bad &type=fail]
+▶ final
+```
+
 Exceptions thrown in blocks other than `try-block` are not caught. If an
-exception was thrown and either `except-block` or `finally-block` throws another
+exception was thrown and either `catch-block` or `finally-block` throws another
 exception, the original exception is lost. Examples:
 
 ```elvish-transcript
-~> try { fail bad } except e { fail worse }
+~> try { fail bad } catch e { fail worse }
 Exception: worse
 Traceback:
   [tty], line 1:
-    try { fail bad } except e { fail worse }
-~> try { fail bad } except e { fail worse } finally { fail worst }
+    try { fail bad } catch e { fail worse }
+~> try { fail bad } catch e { fail worse } finally { fail worst }
 Exception: worst
 Traceback:
   [tty], line 1:
-    try { fail bad } except e { fail worse } finally { fail worst }
+    try { fail bad } catch e { fail worse } finally { fail worst }
 ```
 
 ## Function definition: `fn` {#fn}
@@ -2111,7 +2270,7 @@ recursive functions:
 ```elvish-transcript
 ~> fn f {|n| if (== $n 0) { put 1 } else { * $n (f (- $n 1)) } }
 ~> f 3
-▶ (float64 6)
+▶ (num 6)
 ```
 
 Under the hood, `fn` defines a variable with the given name plus `~` (see
@@ -2152,8 +2311,8 @@ The following pragmas are available:
 
     ```elvish
     pragma unknown-command = disallow
-    var ls = $e:ls~
-    var cat = $e:cat~
+    var ls~ = $e:ls~
+    var cat~ = $e:cat~
     # ls and cat can be used directly;
     # other external commands must be prefixed with e:
     ```
@@ -2205,7 +2364,7 @@ closed pipe, so the following loop will terminate with an exception:
 
 ```elvish-transcript
 ~> while $true { put foo } > &-
-Exception: port has no value output
+Exception: port does not support value output
 [tty 9], line 1: while $true { put foo } > &-
 ```
 
@@ -2342,10 +2501,19 @@ The following namespaces have special meanings to the language:
     an external command.
 
 -   `E:` refers to environment variables. For instance, `$E:USER` is the
-    environment variable `USER`.
+    environment variable `USER`. If the environment variable does not exist it
+    expands to an empty string.
 
-    This **is** always needed, because unlike command resolution, variable
-    resolution does not fall back onto environment variables.
+    **Note**: The `E:` namespace does not distinguish environment variables that
+    are unset and those that are set but empty; for example, `eq $E:VAR ''`
+    outputs `$true` if the `VAR` environment variable is either unset or empty.
+    To make that distinction, use [`has-env`](./builtin.html#has-env) or
+    [`get-env`](./builtin.html#get-env).
+
+    **Note**: Unlike POSIX shells and the `e:` namespace, evaluation of
+    variables do not fall back to the `E:` namespace; thus using `$E:...` (or
+    [`get-env`](./builtin.html#get-env)) **is always needed** when expanding an
+    environment variable.
 
 ## Modules
 
@@ -2372,14 +2540,14 @@ from the module spec by taking the part after the last slash.
 Module specs fall into three categories that are resolved in the following
 order:
 
-1. **Relative**: These are [relative](#relative-imports) to the file containing
-   the `use` command.
+1.  **Relative**: These are [relative](#relative-imports) to the file containing
+    the `use` command.
 
-1. **User defined**: These match a [user defined module](#user-defined-modules)
-   in a [module search directory](command.html#module-search-directories).
+2.  **User defined**: These match a [user defined module](#user-defined-modules)
+    in a [module search directory](command.html#module-search-directories).
 
-1. **Pre-defined**: These match the name of a
-   [pre-defined module](#pre-defined-modules), such as `math` or `str`.
+3.  **Pre-defined**: These match the name of a
+    [pre-defined module](#pre-defined-modules), such as `math` or `str`.
 
 If a module spec doesn't match any of the above a "no such module"
 [exception](#exception) is raised.
@@ -2398,18 +2566,28 @@ Elvish's standard library provides the following pre-defined modules that can be
 imported by the `use` command:
 
 -   [builtin](builtin.html)
+
 -   [edit](edit.html): only available in interactive mode. As a special case it
     does not need importing via `use`, but this may change in the future.
+
 -   [epm](epm.html)
+
 -   [math](math.html)
+
 -   [path](path.html)
+
 -   [platform](platform.html)
+
 -   [re](re.html)
+
 -   [readline-binding](readline-binding.html)
+
 -   [store](store.html)
+
 -   [str](str.html)
+
 -   [unix](unix.html): only available on UNIX-like platforms (see
-    [`$platform:is-unix`](platform.html#platform:is-unix))
+    [`$platform:is-unix`](platform.html#$platform:is-unix))
 
 ### User-defined modules
 
@@ -2458,7 +2636,7 @@ There is experimental support for importing modules written in Go. See the
 
 ### Circular dependencies
 
-Circular dependencies are allowed but has an important restriction. If a module
+Circular dependencies are allowed but have an important restriction. If a module
 `a` contains `use b` and module `b` contains `use a`, the top-level statements
 in module `b` will only be able to access variables that are defined before the
 `use b` in module `a`; other variables will be `$nil`.
@@ -2536,6 +2714,9 @@ fn ls {|@a|
 
 That definition is not visible in module files: `ls` will still refer to the
 external command `ls`, unless you shadow it in the very same module.
+
+Note: to conditionally import a module into a REPL, see the
+[relevant section on `edit:add-var`](edit.html#conditionally-importing-a-module).
 
 ### Re-importing
 

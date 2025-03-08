@@ -4,7 +4,9 @@ import (
 	"errors"
 	"os"
 	"os/exec"
-	"sync/atomic"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"syscall"
 
 	"src.elv.sh/pkg/eval/errs"
@@ -41,7 +43,7 @@ func (e externalCmd) Kind() string {
 	return "fn"
 }
 
-func (e externalCmd) Equal(a interface{}) bool {
+func (e externalCmd) Equal(a any) bool {
 	return e == a
 }
 
@@ -54,7 +56,7 @@ func (e externalCmd) Repr(int) string {
 }
 
 // Call calls an external command.
-func (e externalCmd) Call(fm *Frame, argVals []interface{}, opts map[string]interface{}) error {
+func (e externalCmd) Call(fm *Frame, argVals []any, opts map[string]any) error {
 	if len(opts) > 0 {
 		return ErrExternalCmdOpts
 	}
@@ -65,6 +67,7 @@ func (e externalCmd) Call(fm *Frame, argVals []interface{}, opts map[string]inte
 			if len(argVals) > 0 {
 				return ErrImplicitCdNoArg
 			}
+			fm.Deprecate("implicit cd is deprecated; use cd or location mode instead", fm.traceback.Head, 21)
 			return fm.Evaler.Chdir(e.Name)
 		}
 	}
@@ -88,6 +91,18 @@ func (e externalCmd) Call(fm *Frame, argVals []interface{}, opts map[string]inte
 		return err
 	}
 
+	if runtime.GOOS == "windows" && !filepath.IsAbs(path) {
+		// For some reason, Windows's CreateProcess API doesn't like forward
+		// slashes in relative paths: ".\foo.bat" works but "./foo.bat" results
+		// in an error message that "'.' is not recognized as an internal or
+		// external command, operable program or batch file."
+		//
+		// There seems to be no good reason for this behavior, so we work around
+		// it by replacing forward slashes with backslashes. PowerShell seems to
+		// be something similar to support "./foo.bat".
+		path = strings.ReplaceAll(path, "/", "\\")
+	}
+
 	args[0] = path
 
 	sys := makeSysProcAttr(fm.background)
@@ -107,7 +122,7 @@ func (e externalCmd) Call(fm *Frame, argVals []interface{}, opts map[string]inte
 	ws := state.Sys().(syscall.WaitStatus)
 	if ws.Signaled() && isSIGPIPE(ws.Signal()) {
 		readerGone := fm.ports[1].readerGone
-		if readerGone != nil && atomic.LoadInt32(readerGone) == 1 {
+		if readerGone != nil && readerGone.Load() {
 			return errs.ReaderGone{}
 		}
 	}

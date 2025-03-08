@@ -1,6 +1,12 @@
+use os
+use path
 use re
 use str
 use platform
+
+pragma unknown-command = disallow
+var git~ = $e:git~
+var rsync~ = $e:rsync~
 
 # Verbosity configuration
 var debug-mode = $false
@@ -24,10 +30,7 @@ var -default-domain-config = [
   ]
 ]
 
-#elvdoc:var managed-dir
-#
 # The path of the `epm`-managed directory.
-
 var managed-dir = (
   if $platform:is-windows {
     put $E:LocalAppData/elvish/lib
@@ -66,16 +69,9 @@ fn dest {|pkg|
   put $managed-dir/$pkg
 }
 
-#elvdoc:fn is-installed
-#
-# ```elvish
-# epm:is-installed $pkg
-# ```
-#
 # Returns a boolean value indicating whether the given package is installed.
-
 fn is-installed {|pkg|
-  bool ?(test -e (dest $pkg))
+  path:is-dir (dest $pkg)
 }
 
 fn -package-domain {|pkg|
@@ -90,11 +86,6 @@ fn -package-without-domain {|pkg|
 fn -merge {|a b|
   keys $b | each {|k| set a[$k] = $b[$k] }
   put $a
-}
-
-# Uppercase first letter of a string
-fn -first-upper {|s|
-  put (echo $s[0] | tr '[:lower:]' '[:upper:]')$s[(count $s[0]):]
 }
 
 # Expand tilde at the beginning of a string to the home dir
@@ -123,7 +114,7 @@ set -method-handler = [
     &install= {|pkg dom-cfg|
       var dest = (dest $pkg)
       -info "Installing "$pkg
-      mkdir -p $dest
+      os:mkdir-all $dest
       git clone ($-method-handler[git][src] $pkg $dom-cfg) $dest
     }
 
@@ -132,7 +123,7 @@ set -method-handler = [
       -info "Updating "$pkg
       try {
         git -C $dest pull
-      } except _ {
+      } catch _ {
           -error "Something failed, please check error above and retry."
       }
     }
@@ -177,7 +168,7 @@ fn -package-metadata-file {|pkg|
 
 fn -write-domain-config {|dom|
   var cfgfile = (-domain-config-file $dom)
-  mkdir -p (dirname $cfgfile)
+  os:mkdir-all $managed-dir/$dom
   if (has-key $-default-domain-config $dom) {
     put $-default-domain-config[$dom] | to-json > $cfgfile
   } else {
@@ -192,9 +183,9 @@ fn -write-domain-config {|dom|
 fn -domain-config {|dom|
   var cfgfile = (-domain-config-file $dom)
   var cfg = $false
-  if ?(test -f $cfgfile) {
+  if (path:is-regular &follow-symlink=$true $cfgfile) {
     # If the config file exists, read it...
-    set cfg = (cat $cfgfile | from-json)
+    set cfg = (from-json < $cfgfile)
     -debug "Read domain config for "$dom": "(to-string $cfg)
   } else {
     # ...otherwise check if we have a default config for the domain, and save it
@@ -233,7 +224,7 @@ fn -package-op {|pkg what|
         fail "Unknown operation '"$what"' for package "$pkg
       }
     } else {
-      fail "Unknown method '"$method"', specified in in config file "(-domain-config-file $dom)
+      fail "Unknown method '"$method"', specified in config file "(-domain-config-file $dom)
     }
   } else {
     -error "No config for domain '"$dom"'."
@@ -248,18 +239,12 @@ fn -uninstall-package {|pkg|
   }
   var dest = (dest $pkg)
   -info "Removing package "$pkg
-  rm -rf $dest
+  os:remove-all $dest
 }
 
 ######################################################################
 # Main user-facing functions
 
-#elvdoc:fn metadata
-#
-# ```elvish
-# epm:metadata $pkg
-# ```
-#
 # Returns a hash containing the metadata for the given package. Metadata for a
 # package includes the following base attributes:
 #
@@ -281,8 +266,6 @@ fn -uninstall-package {|pkg|
 # -   `dependencies`: an array listing dependencies of the current package. Any
 #     packages listed will be installed automatically by `epm:install` if they are
 #     not yet installed.
-
-# Read and parse the package metadata, if it exists
 fn metadata {|pkg|
   # Base metadata attributes
   var res = [
@@ -294,24 +277,15 @@ fn metadata {|pkg|
   ]
   # Merge with package-specified attributes, if any
   var file = (-package-metadata-file $pkg)
-  if (and (is-installed $pkg) ?(test -f $file)) {
-    set res = (-merge (cat $file | from-json) $res)
+  if (and (is-installed $pkg) (path:is-regular $file)) {
+    set res = (-merge (from-json < $file) $res)
   }
   put $res
 }
 
-#elvdoc:fn query
-#
-# ```elvish
-# epm:query $pkg
-# ```
-#
 # Pretty print the available metadata of the given package.
-
-# Print out information about a package
 fn query {|pkg|
   var data = (metadata $pkg)
-  var special-keys = [name method installed src dst]
   echo (styled "Package "$data[name] cyan)
   if $data[installed] {
     echo (styled "Installed at "$data[dst] green)
@@ -319,27 +293,22 @@ fn query {|pkg|
     echo (styled "Not installed" red)
   }
   echo (styled "Source:" blue) $data[method] $data[src]
+
+  var special-keys = [name method installed src dst]
   keys $data | each {|key|
-    if (not (has-value $special-keys $key)) {
-      var val = $data[$key]
-      if (eq (kind-of $val) list) {
-        set val = (str:join ", " $val)
-      }
-      echo (styled (-first-upper $key)":" blue) $val
+    if (has-value $special-keys $key) {
+      continue
     }
+    var val = $data[$key]
+    if (eq (kind-of $val) list) {
+      set val = (str:join ", " $val)
+    }
+    echo (styled (str:title $key)":" blue) $val
   }
 }
 
-#elvdoc:fn installed
-#
-# ```elvish
-# epm:installed
-# ```
-#
 # Return an array with all installed packages. `epm:list` can be used as an alias
 # for `epm:installed`.
-
-# List installed packages
 fn installed {
   put $managed-dir/*[nomatch-ok] | each {|dir|
     var dom = (str:replace $managed-dir/ '' $dir)
@@ -358,20 +327,13 @@ fn installed {
 # epm:list is an alias for epm:installed
 fn list { installed }
 
-#elvdoc:fn install
-#
-# ```elvish
-# epm:install &silent-if-installed=$false $pkg...
-# ```
-#
 # Install the named packages. By default, if a package is already installed, a
 # message will be shown. This can be disabled by passing
 # `&silent-if-installed=$true`, so that already-installed packages are silently
 # ignored.
-
-# Install and upgrade are method-specific, so we call the
-# corresponding functions using -package-op
 fn install {|&silent-if-installed=$false @pkgs|
+  # Install and upgrade are method-specific, so we call the
+  # corresponding functions using -package-op
   if (eq $pkgs []) {
     -error "You must specify at least one package."
     return
@@ -393,7 +355,7 @@ fn install {|&silent-if-installed=$false @pkgs|
         # place)
         try {
           install $@deps
-        } except e {
+        } catch e {
           -error "Dependency installation failed. Uninstalling "$pkg", please check the errors above and try again."
           -uninstall-package $pkg
         }
@@ -402,15 +364,8 @@ fn install {|&silent-if-installed=$false @pkgs|
   }
 }
 
-#elvdoc:fn upgrade
-#
-# ```elvish
-# epm:upgrade $pkg...
-# ```
-#
 # Upgrade named packages. If no package name is given, upgrade all installed
 # packages.
-
 fn upgrade {|@pkgs|
   if (eq $pkgs []) {
     set pkgs = [(installed)]
@@ -425,16 +380,9 @@ fn upgrade {|@pkgs|
   }
 }
 
-#elvdoc:fn uninstall
-#
-# ```elvish
-# epm:uninstall $pkg...
-# ```
-#
 # Uninstall named packages.
-
-# Uninstall is the same for everyone, just remove the directory
 fn uninstall {|@pkgs|
+  # Uninstall is the same for everyone, just remove the directory
   if (eq $pkgs []) {
     -error 'You must specify at least one package.'
     return

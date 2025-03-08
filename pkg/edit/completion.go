@@ -9,7 +9,6 @@ import (
 	"sync"
 	"unicode/utf8"
 
-	"src.elv.sh/pkg/cli"
 	"src.elv.sh/pkg/cli/modes"
 	"src.elv.sh/pkg/cli/tk"
 	"src.elv.sh/pkg/edit/complete"
@@ -17,81 +16,15 @@ import (
 	"src.elv.sh/pkg/eval/errs"
 	"src.elv.sh/pkg/eval/vals"
 	"src.elv.sh/pkg/eval/vars"
-	"src.elv.sh/pkg/fsutil"
 	"src.elv.sh/pkg/parse"
 	"src.elv.sh/pkg/persistent/hash"
 	"src.elv.sh/pkg/strutil"
 	"src.elv.sh/pkg/ui"
 )
 
-//elvdoc:var completion:arg-completer
-//
-// A map containing argument completers.
-
-//elvdoc:var completion:binding
-//
-// Keybinding for the completion mode.
-
-//elvdoc:var completion:matcher
-//
-// A map mapping from context names to matcher functions. See the
-// [Matcher](#matcher) section.
-
-//elvdoc:fn complete-filename
-//
-// ```elvish
-// edit:complete-filename $args...
-// ```
-//
-// Produces a list of filenames found in the directory of the last argument. All
-// other arguments are ignored. If the last argument does not contain a path
-// (either absolute or relative to the current directory), then the current
-// directory is used. Relevant files are output as `edit:complex-candidate`
-// objects.
-//
-// This function is the default handler for any commands without
-// explicit handlers in `$edit:completion:arg-completer`. See [Argument
-// Completer](#argument-completer).
-//
-// Example:
-//
-// ```elvish-transcript
-// ~> edit:complete-filename ''
-// ▶ (edit:complex-candidate Applications &code-suffix=/ &style='01;34')
-// ▶ (edit:complex-candidate Books &code-suffix=/ &style='01;34')
-// ▶ (edit:complex-candidate Desktop &code-suffix=/ &style='01;34')
-// ▶ (edit:complex-candidate Docsafe &code-suffix=/ &style='01;34')
-// ▶ (edit:complex-candidate Documents &code-suffix=/ &style='01;34')
-// ...
-// ~> edit:complete-filename .elvish/
-// ▶ (edit:complex-candidate .elvish/aliases &code-suffix=/ &style='01;34')
-// ▶ (edit:complex-candidate .elvish/db &code-suffix=' ' &style='')
-// ▶ (edit:complex-candidate .elvish/epm-installed &code-suffix=' ' &style='')
-// ▶ (edit:complex-candidate .elvish/lib &code-suffix=/ &style='01;34')
-// ▶ (edit:complex-candidate .elvish/rc.elv &code-suffix=' ' &style='')
-// ```
-
-//elvdoc:fn complex-candidate
-//
-// ```elvish
-// edit:complex-candidate $stem &display='' &code-suffix=''
-// ```
-//
-// Builds a complex candidate. This is mainly useful in [argument
-// completers](#argument-completer).
-//
-// The `&display` option controls how the candidate is shown in the UI. It can
-// be a string or a [styled](builtin.html#styled) text. If it is empty, `$stem`
-// is used.
-//
-// The `&code-suffix` option affects how the candidate is inserted into the code
-// when it is accepted. By default, a quoted version of `$stem` is inserted. If
-// `$code-suffix` is non-empty, it is added to that text, and the suffix is not
-// quoted.
-
 type complexCandidateOpts struct {
 	CodeSuffix string
-	Display    interface{}
+	Display    any
 }
 
 func (*complexCandidateOpts) SetDefaultOptions() {}
@@ -116,71 +49,19 @@ func complexCandidate(fm *eval.Frame, opts complexCandidateOpts, stem string) (c
 	}, nil
 }
 
-//elvdoc:fn match-prefix
-//
-// ```elvish
-// edit:match-prefix $seed $inputs?
-// ```
-//
-// For each input, outputs whether the input has $seed as a prefix. Uses the
-// result of `to-string` for non-string inputs.
-//
-// Roughly equivalent to the following Elvish function, but more efficient:
-//
-// ```elvish
-// use str
-// fn match-prefix {|seed @input|
-//   each {|x| str:has-prefix (to-string $x) $seed } $@input
-// }
-// ```
-
-//elvdoc:fn match-subseq
-//
-// ```elvish
-// edit:match-subseq $seed $inputs?
-// ```
-//
-// For each input, outputs whether the input has $seed as a
-// [subsequence](https://en.wikipedia.org/wiki/Subsequence). Uses the result of
-// `to-string` for non-string inputs.
-
-//elvdoc:fn match-substr
-//
-// ```elvish
-// edit:match-substr $seed $inputs?
-// ```
-//
-// For each input, outputs whether the input has $seed as a substring. Uses the
-// result of `to-string` for non-string inputs.
-//
-// Roughly equivalent to the following Elvish function, but more efficient:
-//
-// ```elvish
-// use str
-// fn match-substr {|seed @input|
-//   each {|x| str:has-contains (to-string $x) $seed } $@input
-// }
-// ```
-
-//elvdoc:fn completion:start
-//
-// Start the completion mode.
-
-//elvdoc:fn completion:smart-start
-//
-// Starts the completion mode. However, if all the candidates share a non-empty
-// prefix and that prefix starts with the seed, inserts the prefix instead.
-
-func completionStart(app cli.App, bindings tk.Bindings, cfg complete.Config, smart bool) {
-	codeArea, ok := focusedCodeArea(app)
+func completionStart(ed *Editor, bindings tk.Bindings, ev *eval.Evaler, cfg complete.Config, smart bool) {
+	codeArea, ok := focusedCodeArea(ed.app)
 	if !ok {
 		return
 	}
+	if smart {
+		ed.applyAutofix()
+	}
 	buf := codeArea.CopyState().Buffer
 	result, err := complete.Complete(
-		complete.CodeBuffer{Content: buf.Content, Dot: buf.Dot}, cfg)
+		complete.CodeBuffer{Content: buf.Content, Dot: buf.Dot}, ev, cfg)
 	if err != nil {
-		app.Notify(modes.ErrorText(err))
+		ed.app.Notify(modes.ErrorText(err))
 		return
 	}
 	if smart {
@@ -212,21 +93,17 @@ func completionStart(app cli.App, bindings tk.Bindings, cfg complete.Config, sma
 			}
 		}
 	}
-	w, err := modes.NewCompletion(app, modes.CompletionSpec{
+	w, err := modes.NewCompletion(ed.app, modes.CompletionSpec{
 		Name: result.Name, Replace: result.Replace, Items: result.Items,
 		Filter: filterSpec, Bindings: bindings,
 	})
 	if w != nil {
-		app.PushAddon(w)
+		ed.app.PushAddon(w)
 	}
 	if err != nil {
-		app.Notify(modes.ErrorText(err))
+		ed.app.Notify(modes.ErrorText(err))
 	}
 }
-
-//elvdoc:fn completion:close
-//
-// Closes the completion mode UI.
 
 func initCompletion(ed *Editor, ev *eval.Evaler, nb eval.NsBuilder) {
 	bindingVar := newBindingVar(emptyBindingsMap)
@@ -235,7 +112,6 @@ func initCompletion(ed *Editor, ev *eval.Evaler, nb eval.NsBuilder) {
 	argGeneratorMapVar := newMapVar(vals.EmptyMap)
 	cfg := func() complete.Config {
 		return complete.Config{
-			PureEvaler: pureEvaler{ev},
 			Filterer: adaptMatcherMap(
 				ed, ev, matcherMapVar.Get().(vals.Map)),
 			ArgGenerator: adaptArgGeneratorMap(
@@ -243,10 +119,11 @@ func initCompletion(ed *Editor, ev *eval.Evaler, nb eval.NsBuilder) {
 		}
 	}
 	generateForSudo := func(args []string) ([]complete.RawItem, error) {
-		return complete.GenerateForSudo(cfg(), args)
+		return complete.GenerateForSudo(args, ev, cfg())
 	}
-	nb.AddGoFns(map[string]interface{}{
+	nb.AddGoFns(map[string]any{
 		"complete-filename": wrapArgGenerator(complete.GenerateFileNames),
+		"complete-dirname":  wrapArgGenerator(complete.GenerateDirNames),
 		"complete-getopt":   completeGetopt,
 		"complete-sudo":     wrapArgGenerator(generateForSudo),
 		"complex-candidate": complexCandidate,
@@ -262,10 +139,10 @@ func initCompletion(ed *Editor, ev *eval.Evaler, nb eval.NsBuilder) {
 				"binding":       bindingVar,
 				"matcher":       matcherMapVar,
 			}).
-			AddGoFns(map[string]interface{}{
+			AddGoFns(map[string]any{
 				"accept":      func() { listingAccept(app) },
-				"smart-start": func() { completionStart(app, bindings, cfg(), true) },
-				"start":       func() { completionStart(app, bindings, cfg(), false) },
+				"smart-start": func() { completionStart(ed, bindings, ev, cfg(), true) },
+				"start":       func() { completionStart(ed, bindings, ev, cfg(), false) },
 				"up":          func() { listingUp(app) },
 				"down":        func() { listingDown(app) },
 				"up-cycle":    func() { listingUpCycle(app) },
@@ -278,7 +155,7 @@ func initCompletion(ed *Editor, ev *eval.Evaler, nb eval.NsBuilder) {
 // A wrapper type implementing Elvish value methods.
 type complexItem complete.ComplexItem
 
-func (c complexItem) Index(k interface{}) (interface{}, bool) {
+func (c complexItem) Index(k any) (any, bool) {
 	switch k {
 	case "stem":
 		return c.Stem, true
@@ -290,13 +167,13 @@ func (c complexItem) Index(k interface{}) (interface{}, bool) {
 	return nil, false
 }
 
-func (c complexItem) IterateKeys(f func(interface{}) bool) {
+func (c complexItem) IterateKeys(f func(any) bool) {
 	vals.Feed(f, "stem", "code-suffix", "display")
 }
 
 func (c complexItem) Kind() string { return "map" }
 
-func (c complexItem) Equal(a interface{}) bool {
+func (c complexItem) Equal(a any) bool {
 	rhs, ok := a.(complexItem)
 	return ok && c.Stem == rhs.Stem &&
 		c.CodeSuffix == rhs.CodeSuffix && reflect.DeepEqual(c.Display, rhs.Display)
@@ -328,7 +205,7 @@ func wrapArgGenerator(gen complete.ArgGenerator) wrappedArgGenerator {
 		}
 		out := fm.ValueOutput()
 		for _, rawItem := range rawItems {
-			var v interface{}
+			var v any
 			switch rawItem := rawItem.(type) {
 			case complete.ComplexItem:
 				v = complexItem(rawItem)
@@ -389,14 +266,14 @@ func wrapMatcher(m matcher) wrappedMatcher {
 			if opts.IgnoreCase {
 				seed = strings.ToLower(seed)
 			}
-			inputs(func(v interface{}) {
+			inputs(func(v any) {
 				if errOut != nil {
 					return
 				}
 				errOut = out.Put(m(strings.ToLower(vals.ToString(v)), seed))
 			})
 		} else {
-			inputs(func(v interface{}) {
+			inputs(func(v any) {
 				if errOut != nil {
 					return
 				}
@@ -418,7 +295,7 @@ func adaptMatcherMap(nt notifier, ev *eval.Evaler, m vals.Map) complete.Filterer
 		if matcher == nil {
 			return complete.FilterPrefix(ctxName, seed, rawItems)
 		}
-		input := make(chan interface{})
+		input := make(chan any)
 		stopInputFeeder := make(chan struct{})
 		defer close(stopInputFeeder)
 		// Feed a string representing all raw candidates to the input channel.
@@ -434,14 +311,14 @@ func adaptMatcherMap(nt notifier, ev *eval.Evaler, m vals.Map) complete.Filterer
 		}()
 
 		// TODO: Supply the Chan component of port 2.
-		port1, collect, err := eval.CapturePort()
+		port1, collect, err := eval.ValueCapturePort()
 		if err != nil {
 			nt.notifyf("cannot create pipe to run completion matcher: %v", err)
 			return nil
 		}
 
 		err = ev.Call(matcher,
-			eval.CallCfg{Args: []interface{}{seed}, From: "[editor matcher]"},
+			eval.CallCfg{Args: []any{seed}, From: "[editor matcher]"},
 			eval.EvalCfg{Ports: []*eval.Port{
 				// TODO: Supply the Chan component of port 2.
 				{Chan: input, File: eval.DevNull}, port1, {File: os.Stderr}}})
@@ -475,7 +352,7 @@ func adaptArgGeneratorMap(ev *eval.Evaler, m vals.Map) complete.ArgGenerator {
 		if gen == nil {
 			return complete.GenerateFileNames(args)
 		}
-		argValues := make([]interface{}, len(args))
+		argValues := make([]any, len(args))
 		for i, arg := range args {
 			argValues[i] = arg
 		}
@@ -486,7 +363,7 @@ func adaptArgGeneratorMap(ev *eval.Evaler, m vals.Map) complete.ArgGenerator {
 			defer outputMutex.Unlock()
 			output = append(output, item)
 		}
-		valueCb := func(ch <-chan interface{}) {
+		valueCb := func(ch <-chan any) {
 			for v := range ch {
 				switch v := v.(type) {
 				case string:
@@ -539,34 +416,4 @@ func lookupFn(m vals.Map, ctxName string) (eval.Callable, bool) {
 		return nil, false
 	}
 	return fn, true
-}
-
-type pureEvaler struct{ ev *eval.Evaler }
-
-func (pureEvaler) EachExternal(f func(string)) { fsutil.EachExternal(f) }
-
-func (pureEvaler) EachSpecial(f func(string)) {
-	for name := range eval.IsBuiltinSpecial {
-		f(name)
-	}
-}
-
-func (pe pureEvaler) EachNs(f func(string)) {
-	eachNsInTop(pe.ev.Builtin(), pe.ev.Global(), f)
-}
-
-func (pe pureEvaler) EachVariableInNs(ns string, f func(string)) {
-	eachVariableInTop(pe.ev.Builtin(), pe.ev.Global(), ns, f)
-}
-
-func (pe pureEvaler) PurelyEvalPrimary(pn *parse.Primary) interface{} {
-	return pe.ev.PurelyEvalPrimary(pn)
-}
-
-func (pe pureEvaler) PurelyEvalCompound(cn *parse.Compound) (string, bool) {
-	return pe.ev.PurelyEvalCompound(cn)
-}
-
-func (pe pureEvaler) PurelyEvalPartialCompound(cn *parse.Compound, upto int) (string, bool) {
-	return pe.ev.PurelyEvalPartialCompound(cn, upto)
 }

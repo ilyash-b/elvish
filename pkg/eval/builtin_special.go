@@ -17,9 +17,12 @@ package eval
 // closures functioning as code blocks.
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
+	"unicode/utf8"
 
 	"src.elv.sh/pkg/diag"
 	"src.elv.sh/pkg/eval/vals"
@@ -42,14 +45,29 @@ type NoSuchModule struct{ spec string }
 // Error implements the error interface.
 func (err NoSuchModule) Error() string { return "no such module: " + err.spec }
 
+// PluginLoadError wraps a plugin loading error.
+type PluginLoadError struct {
+	spec string
+	err  error
+}
+
+// Error implements the error interface.
+func (err PluginLoadError) Error() string {
+	return "load as plugin: " + err.spec + ": " + err.err.Error()
+}
+
+// Unwrap returns the wrapped error.
+func (err PluginLoadError) Unwrap() error { return err.err }
+
 func init() {
 	// Needed to avoid initialization loop
 	builtinSpecials = map[string]compileBuiltin{
-		"var": compileVar,
-		"set": compileSet,
-		"tmp": compileTmp,
-		"del": compileDel,
-		"fn":  compileFn,
+		"var":  compileVar,
+		"set":  compileSet,
+		"tmp":  compileTmp,
+		"with": compileWith,
+		"del":  compileDel,
+		"fn":   compileFn,
 
 		"use": compileUse,
 
@@ -69,10 +87,9 @@ func init() {
 	}
 }
 
-// VarForm = 'var' { VariablePrimary } [ '=' { Compound } ]
+// VarForm = 'var' { LHS } [ '=' { Compound } ]
 func compileVar(cp *compiler, fn *parse.Form) effectOp {
-	lhsArgs, rhs := compileLHSRHS(cp, fn)
-	lhs := cp.parseCompoundLValues(lhsArgs, newLValue)
+	lhs, rhs := compileLHSOptionalRHS(cp, fn.Args, fn.To, newLValue)
 	if rhs == nil {
 		// Just create new variables, nothing extra to do at runtime.
 		return nopOp{}
@@ -82,7 +99,7 @@ func compileVar(cp *compiler, fn *parse.Form) effectOp {
 
 // SetForm = 'set' { LHS } '=' { Compound }
 func compileSet(cp *compiler, fn *parse.Form) effectOp {
-	lhs, rhs := compileSetArgs(cp, fn)
+	lhs, rhs := compileLHSRHS(cp, fn.Args, fn.To, setLValue)
 	return &assignOp{fn.Range(), lhs, rhs, false}
 }
 
@@ -91,32 +108,116 @@ func compileTmp(cp *compiler, fn *parse.Form) effectOp {
 	if len(cp.scopes) <= 1 {
 		cp.errorpf(fn, "tmp may only be used inside a function")
 	}
-	lhs, rhs := compileSetArgs(cp, fn)
+	lhs, rhs := compileLHSRHS(cp, fn.Args, fn.To, setLValue)
 	return &assignOp{fn.Range(), lhs, rhs, true}
 }
 
-func compileSetArgs(cp *compiler, fn *parse.Form) (lvaluesGroup, valuesOp) {
-	lhsArgs, rhs := compileLHSRHS(cp, fn)
-	if rhs == nil {
-		cp.errorpf(diag.PointRanging(fn.Range().To), "need = and right-hand-side")
+func compileWith(cp *compiler, fn *parse.Form) effectOp {
+	if len(fn.Args) < 2 {
+		cp.errorpfPartial(fn, "with requires at least two arguments")
+		return nopOp{}
 	}
-	lhs := cp.parseCompoundLValues(lhsArgs, setLValue)
+	lastArg := fn.Args[len(fn.Args)-1]
+	bodyNode, ok := cmpd.Lambda(lastArg)
+	if !ok {
+		// It's possible that we just haven't seen the last argument yet.
+		cp.errorpfPartial(diag.PointRanging(fn.To), "last argument must be a lambda")
+		return nopOp{}
+	}
+
+	assignNodes := fn.Args[:len(fn.Args)-1]
+	firstNode, ok := cmpd.Primary(assignNodes[0])
+	if !ok {
+		cp.errorpf(assignNodes[0], "argument must not be compound expressions")
+		return nopOp{}
+	}
+
+	var assigns []withAssign
+	if firstNode.Type == parse.List {
+		assigns = make([]withAssign, len(assignNodes))
+		for i, assignNode := range assignNodes {
+			p, ok := cmpd.Primary(assignNode)
+			if !ok {
+				cp.errorpf(assignNode, "argument must not be compound expressions")
+				continue
+			}
+			if p.Type != parse.List {
+				cp.errorpf(assignNode, "argument must be a list")
+				continue
+			}
+			lhs, rhs := compileLHSRHS(cp, p.Elements, p.To, setLValue)
+			assigns[i] = withAssign{assignNode.Range(), lhs, rhs}
+		}
+	} else {
+		lhs, rhs := compileLHSRHS(cp, assignNodes, assignNodes[len(assignNodes)-1].To, setLValue)
+		assigns = []withAssign{{diag.MixedRanging(assignNodes[0], assignNodes[len(assignNodes)-1]), lhs, rhs}}
+	}
+	return &withOp{fn.Range(), assigns, cp.primaryOp(bodyNode)}
+}
+
+type withOp struct {
+	diag.Ranging
+	assigns []withAssign
+	bodyOp  valuesOp
+}
+
+type withAssign struct {
+	diag.Ranging
+	lhs lvaluesGroup
+	rhs valuesOp
+}
+
+func (op *withOp) exec(fm *Frame) (opExc Exception) {
+	var restoreFuncs []func(*Frame) Exception
+	defer func() {
+		for i := len(restoreFuncs) - 1; i >= 0; i-- {
+			exc := restoreFuncs[i](fm)
+			if exc != nil && opExc == nil {
+				opExc = exc
+			}
+		}
+	}()
+	for _, assign := range op.assigns {
+		exc := doAssign(fm, assign, assign.lhs, assign.rhs, func(f func(*Frame) Exception) {
+			restoreFuncs = append(restoreFuncs, f)
+		})
+		if exc != nil {
+			return exc
+		}
+	}
+	body := execLambdaOp(fm, op.bodyOp)
+	return fm.errorp(op, body.Call(fm.Fork(), NoArgs, NoOpts))
+}
+
+// Finds LHS and RHS, compiling the RHS. Syntax:
+//
+//	{ LHS } '=' { Compound }
+func compileLHSRHS(cp *compiler, args []*parse.Compound, end int, lf lvalueFlag) (lvaluesGroup, valuesOp) {
+	lhs, rhs := compileLHSOptionalRHS(cp, args, end, lf)
+	if rhs == nil {
+		cp.errorpfPartial(diag.PointRanging(end), "need = and right-hand-side")
+	}
 	return lhs, rhs
 }
 
-func compileLHSRHS(cp *compiler, fn *parse.Form) ([]*parse.Compound, valuesOp) {
-	for i, cn := range fn.Args {
+// Finds LHS and optional RHS, compiling RHS if it exists. Syntax:
+//
+//	{ LHS } [ '=' { Compound } ]
+func compileLHSOptionalRHS(cp *compiler, args []*parse.Compound, end int, lf lvalueFlag) (lvaluesGroup, valuesOp) {
+	for i, cn := range args {
 		if parse.SourceText(cn) == "=" {
-			lhs := fn.Args[:i]
-			if i == len(fn.Args)-1 {
-				return lhs, nopValuesOp{diag.PointRanging(fn.Range().To)}
+			var rhs valuesOp
+			if i == len(args)-1 {
+				rhs = nopValuesOp{diag.PointRanging(end)}
+			} else {
+				rhs = seqValuesOp{
+					diag.MixedRanging(args[i+1], args[len(args)-1]),
+					cp.compoundOps(args[i+1:])}
 			}
-			return lhs, seqValuesOp{
-				diag.MixedRanging(fn.Args[i+1], fn.Args[len(fn.Args)-1]),
-				cp.compoundOps(fn.Args[i+1:])}
+			return cp.compileCompoundLValues(args[:i], lf), rhs
 		}
 	}
-	return fn.Args, nil
+	return cp.compileCompoundLValues(args, lf), nil
 }
 
 const delArgMsg = "arguments to del must be variable or variable elements"
@@ -131,16 +232,18 @@ func compileDel(cp *compiler, fn *parse.Form) effectOp {
 		}
 		head, indices := cn.Indexings[0].Head, cn.Indexings[0].Indices
 		if head.Type == parse.Variable {
-			cp.errorpf(cn, "arguments to del must drop $")
+			cp.errorpf(cn, "arguments to del must omit the dollar sign")
+			continue
 		} else if !parse.ValidLHSVariable(head, false) {
 			cp.errorpf(cn, delArgMsg)
+			continue
 		}
 
 		qname := head.Value
 		var f effectOp
 		ref := resolveVarRef(cp, qname, nil)
 		if ref == nil {
-			cp.errorpf(cn, "no variable $%s", head.Value)
+			cp.errorpfPartial(cn, "no variable $%s", head.Value)
 			continue
 		}
 		if len(indices) == 0 {
@@ -150,7 +253,7 @@ func compileDel(cp *compiler, fn *parse.Form) effectOp {
 				f = delLocalVarOp{ref.index}
 				cp.thisScope().infos[ref.index].deleted = true
 			} else {
-				cp.errorpf(cn, "only variables in local: or E: can be deleted")
+				cp.errorpf(cn, "only variables in the local scope or E: can be deleted")
 				continue
 			}
 		} else {
@@ -198,7 +301,7 @@ func (op *delElemOp) Range() diag.Ranging {
 }
 
 func (op *delElemOp) exec(fm *Frame) Exception {
-	var indices []interface{}
+	var indices []any
 	for _, indexOp := range op.indexOps {
 		indexValues, exc := indexOp.exec(fm)
 		if exc != nil {
@@ -223,24 +326,25 @@ func (op *delElemOp) exec(fm *Frame) Exception {
 //
 // fn f { foobar } is a shorthand for set '&'f = { foobar }.
 func compileFn(cp *compiler, fn *parse.Form) effectOp {
-	args := cp.walkArgs(fn)
-	nameNode := args.next()
-	name := stringLiteralOrError(cp, nameNode, "function name")
-	bodyNode := args.nextMustLambda("function body")
-	args.mustEnd()
+	args := getArgs(cp, fn)
+	name := args.get(0, "name").stringLiteral()
+	bodyNode := args.get(1, "function body").lambda()
+	if !args.finish() {
+		return nil
+	}
 
 	// Define the variable before compiling the body, so that the body may refer
 	// to the function itself.
 	index := cp.thisScope().add(name + FnSuffix)
 	op := cp.lambda(bodyNode)
 
-	return fnOp{nameNode.Range(), index, op}
+	return fnOp{fn.Args[0].Range(), index, op}
 }
 
 type fnOp struct {
-	keywordRange diag.Ranging
-	varIndex     int
-	lambdaOp     valuesOp
+	nameRange diag.Ranging
+	varIndex  int
+	lambdaOp  valuesOp
 }
 
 func (op fnOp) exec(fm *Frame) Exception {
@@ -254,7 +358,7 @@ func (op fnOp) exec(fm *Frame) Exception {
 	}
 	c := values[0].(*Closure)
 	c.op = fnWrap{c.op}
-	return fm.errorp(op.keywordRange, fm.local.slots[op.varIndex].Set(c))
+	return fm.errorp(op.nameRange, fm.local.slots[op.varIndex].Set(c))
 }
 
 type fnWrap struct{ effectOp }
@@ -272,24 +376,16 @@ func (op fnWrap) exec(fm *Frame) Exception {
 
 // UseForm = 'use' StringPrimary
 func compileUse(cp *compiler, fn *parse.Form) effectOp {
-	var name, spec string
-
-	switch len(fn.Args) {
-	case 0:
-		end := fn.Head.Range().To
-		cp.errorpf(diag.PointRanging(end), "lack module name")
-	case 1:
-		spec = stringLiteralOrError(cp, fn.Args[0], "module spec")
-		// Use the last path component as the name; for instance, if path =
-		// "a/b/c/d", name is "d". If path doesn't have slashes, name = path.
+	args := getArgs(cp, fn)
+	spec := args.get(0, "module spec").stringLiteral()
+	name := ""
+	if args.has(1) {
+		name = args.get(1, "module name").stringLiteral()
+	} else {
 		name = spec[strings.LastIndexByte(spec, '/')+1:]
-	case 2:
-		// TODO(xiaq): Allow using variable as module path
-		spec = stringLiteralOrError(cp, fn.Args[0], "module spec")
-		name = stringLiteralOrError(cp, fn.Args[1], "module name")
-	default: // > 2
-		cp.errorpf(diag.MixedRanging(fn.Args[2], fn.Args[len(fn.Args)-1]),
-			"superfluous argument(s)")
+	}
+	if !args.finish() {
+		return nil
 	}
 
 	return useOp{fn.Range(), cp.thisScope().add(name + NsSuffix), spec}
@@ -318,8 +414,8 @@ func use(fm *Frame, spec string, r diag.Ranger) (*Ns, error) {
 	// translate a module spec to an appropriate path for the platform.
 	if strings.HasPrefix(spec, "./") || strings.HasPrefix(spec, "../") {
 		var dir string
-		if fm.srcMeta.IsFile {
-			dir = filepath.Dir(fm.srcMeta.Name)
+		if fm.src.IsFile {
+			dir = filepath.Dir(fm.src.Name)
 		} else {
 			var err error
 			dir, err = os.Getwd()
@@ -376,18 +472,31 @@ func useFromFile(fm *Frame, spec, path string, r diag.Ranger) (*Ns, error) {
 
 	plug, err := pluginOpen(path + ".so")
 	if err != nil {
-		return nil, NoSuchModule{spec}
+		return nil, PluginLoadError{spec, err}
 	}
 	sym, err := plug.Lookup("Ns")
 	if err != nil {
-		return nil, err
+		return nil, PluginLoadError{spec, err}
 	}
 	ns, ok := sym.(**Ns)
 	if !ok {
-		return nil, NoSuchModule{spec}
+		// plug.Lookup always returns a pointer
+		t := reflect.TypeOf(sym).Elem()
+		return nil, PluginLoadError{spec, fmt.Errorf("Ns symbol has wrong type %s", t)}
 	}
 	fm.Evaler.modules[path] = *ns
 	return *ns, nil
+}
+
+func readFileUTF8(fname string) (string, error) {
+	bytes, err := os.ReadFile(fname)
+	if err != nil {
+		return "", err
+	}
+	if !utf8.Valid(bytes) {
+		return "", fmt.Errorf("%s: source is not valid UTF-8", fname)
+	}
+	return string(bytes), nil
 }
 
 // TODO: Make access to fm.Evaler.modules concurrency-safe.
@@ -436,7 +545,7 @@ type andOrOp struct {
 }
 
 func (op *andOrOp) exec(fm *Frame) Exception {
-	var lastValue interface{} = vals.Bool(op.init)
+	var lastValue any = vals.Bool(op.init)
 	out := fm.ValueOutput()
 	for _, argOp := range op.argOps {
 		values, exc := argOp.exec(fm)
@@ -481,26 +590,31 @@ func (op *coalesceOp) exec(fm *Frame) Exception {
 }
 
 func compileIf(cp *compiler, fn *parse.Form) effectOp {
-	args := cp.walkArgs(fn)
+	args := getArgs(cp, fn)
 	var condNodes []*parse.Compound
 	var bodyNodes []*parse.Primary
-	condLeader := "if"
+	i := 0
+	bodyName := "if body"
 	for {
-		condNodes = append(condNodes, args.next())
-		bodyNodes = append(bodyNodes, args.nextMustThunk(condLeader))
-		if !args.nextIs("elif") {
+		condNodes = append(condNodes, args.get(i, "condition").any())
+		bodyNodes = append(bodyNodes, args.get(i+1, bodyName).thunk())
+		i += 2
+		if !args.hasKeyword(i, "elif") {
 			break
 		}
-		condLeader = "elif"
+		i++
+		bodyName = "elif body"
 	}
-	elseNode := args.nextMustThunkIfAfter("else")
-	args.mustEnd()
+	elseBody := args.optionalKeywordBody(i, "else")
+	if !args.finish() {
+		return nil
+	}
 
 	condOps := cp.compoundOps(condNodes)
 	bodyOps := cp.primaryOps(bodyNodes)
 	var elseOp valuesOp
-	if elseNode != nil {
-		elseOp = cp.primaryOp(elseNode)
+	if elseBody != nil {
+		elseOp = cp.primaryOp(elseBody)
 	}
 
 	return &ifOp{fn.Range(), condOps, bodyOps, elseOp}
@@ -520,26 +634,28 @@ func (op *ifOp) exec(fm *Frame) Exception {
 	}
 	elseFn := execLambdaOp(fm, op.elseOp)
 	for i, condOp := range op.condOps {
-		condValues, exc := condOp.exec(fm.Fork("if cond"))
+		condValues, exc := condOp.exec(fm.Fork())
 		if exc != nil {
 			return exc
 		}
 		if allTrue(condValues) {
-			return fm.errorp(op, bodies[i].Call(fm.Fork("if body"), NoArgs, NoOpts))
+			return fm.errorp(op, bodies[i].Call(fm.Fork(), NoArgs, NoOpts))
 		}
 	}
 	if op.elseOp != nil {
-		return fm.errorp(op, elseFn.Call(fm.Fork("if else"), NoArgs, NoOpts))
+		return fm.errorp(op, elseFn.Call(fm.Fork(), NoArgs, NoOpts))
 	}
 	return nil
 }
 
 func compileWhile(cp *compiler, fn *parse.Form) effectOp {
-	args := cp.walkArgs(fn)
-	condNode := args.next()
-	bodyNode := args.nextMustThunk("while body")
-	elseNode := args.nextMustThunkIfAfter("else")
-	args.mustEnd()
+	args := getArgs(cp, fn)
+	condNode := args.get(0, "condition").any()
+	bodyNode := args.get(1, "while body").thunk()
+	elseNode := args.optionalKeywordBody(2, "else")
+	if !args.finish() {
+		return nil
+	}
 
 	condOp := cp.compoundOp(condNode)
 	bodyOp := cp.primaryOp(bodyNode)
@@ -562,7 +678,7 @@ func (op *whileOp) exec(fm *Frame) Exception {
 
 	iterated := false
 	for {
-		condValues, exc := op.condOp.exec(fm.Fork("while cond"))
+		condValues, exc := op.condOp.exec(fm.Fork())
 		if exc != nil {
 			return exc
 		}
@@ -570,7 +686,7 @@ func (op *whileOp) exec(fm *Frame) Exception {
 			break
 		}
 		iterated = true
-		err := body.Call(fm.Fork("while"), NoArgs, NoOpts)
+		err := body.Call(fm.Fork(), NoArgs, NoOpts)
 		if err != nil {
 			exc := err.(Exception)
 			if exc.Reason() == Continue {
@@ -584,18 +700,20 @@ func (op *whileOp) exec(fm *Frame) Exception {
 	}
 
 	if op.elseOp != nil && !iterated {
-		return fm.errorp(op, elseBody.Call(fm.Fork("while else"), NoArgs, NoOpts))
+		return fm.errorp(op, elseBody.Call(fm.Fork(), NoArgs, NoOpts))
 	}
 	return nil
 }
 
 func compileFor(cp *compiler, fn *parse.Form) effectOp {
-	args := cp.walkArgs(fn)
-	varNode := args.next()
-	iterNode := args.next()
-	bodyNode := args.nextMustThunk("for body")
-	elseNode := args.nextMustThunkIfAfter("else")
-	args.mustEnd()
+	args := getArgs(cp, fn)
+	varNode := args.get(0, "variable").any()
+	iterNode := args.get(1, "iterable").any()
+	bodyNode := args.get(2, "for body").thunk()
+	elseNode := args.optionalKeywordBody(3, "else")
+	if !args.finish() {
+		return nil
+	}
 
 	lvalue := cp.compileOneLValue(varNode, setLValue|newLValue)
 
@@ -632,14 +750,14 @@ func (op *forOp) exec(fm *Frame) Exception {
 
 	iterated := false
 	var errElement error
-	errIterate := vals.Iterate(iterable, func(v interface{}) bool {
+	errIterate := vals.Iterate(iterable, func(v any) bool {
 		iterated = true
 		err := variable.Set(v)
 		if err != nil {
 			errElement = err
 			return false
 		}
-		err = body.Call(fm.Fork("for"), NoArgs, NoOpts)
+		err = body.Call(fm.Fork(), NoArgs, NoOpts)
 		if err != nil {
 			exc := err.(Exception)
 			if exc.Reason() == Continue {
@@ -661,40 +779,51 @@ func (op *forOp) exec(fm *Frame) Exception {
 	}
 
 	if !iterated && elseBody != nil {
-		return fm.errorp(op, elseBody.Call(fm.Fork("for else"), NoArgs, NoOpts))
+		return fm.errorp(op, elseBody.Call(fm.Fork(), NoArgs, NoOpts))
 	}
 	return nil
 }
 
 func compileTry(cp *compiler, fn *parse.Form) effectOp {
-	logger.Println("compiling try")
-	args := cp.walkArgs(fn)
-	bodyNode := args.nextMustThunk("try body")
-	logger.Printf("body is %q", parse.SourceText(bodyNode))
-	var exceptVarNode *parse.Compound
-	var exceptNode *parse.Primary
-	if args.nextIs("except") {
-		logger.Println("except-ing")
+	args := getArgs(cp, fn)
+	bodyNode := args.get(0, "try body").thunk()
+	i := 1
+	var catchVarNode *parse.Compound
+	var catchNode *parse.Primary
+	if args.hasKeyword(i, "catch") {
+		i++
 		// Parse an optional lvalue into exceptVarNode.
-		n := args.peek()
+		n := args.get(i, "variable or body").any()
 		if _, ok := cmpd.StringLiteral(n); ok {
-			exceptVarNode = n
-			args.next()
+			catchVarNode = n
+			i++
 		}
-		exceptNode = args.nextMustThunk("except body")
+		catchNode = args.get(i, "catch body").thunk()
+		i++
 	}
-	elseNode := args.nextMustThunkIfAfter("else")
-	finallyNode := args.nextMustThunkIfAfter("finally")
-	args.mustEnd()
+	elseNode := args.optionalKeywordBody(i, "else")
+	if elseNode != nil {
+		i += 2
+	}
+	finallyNode := args.optionalKeywordBody(i, "finally")
+	if !args.finish() {
+		return nil
+	}
 
-	var exceptVar lvalue
-	var bodyOp, exceptOp, elseOp, finallyOp valuesOp
-	bodyOp = cp.primaryOp(bodyNode)
-	if exceptVarNode != nil {
-		exceptVar = cp.compileOneLValue(exceptVarNode, setLValue|newLValue)
+	if elseNode != nil && catchNode == nil {
+		cp.errorpf(fn, "try with an else block requires a catch block")
+	} else if catchNode == nil && finallyNode == nil {
+		cp.errorpfPartial(fn, "try must be followed by a catch block or a finally block")
 	}
-	if exceptNode != nil {
-		exceptOp = cp.primaryOp(exceptNode)
+
+	var catchVar lvalue
+	var bodyOp, catchOp, elseOp, finallyOp valuesOp
+	bodyOp = cp.primaryOp(bodyNode)
+	if catchVarNode != nil {
+		catchVar = cp.compileOneLValue(catchVarNode, setLValue|newLValue)
+	}
+	if catchNode != nil {
+		catchOp = cp.primaryOp(catchNode)
 	}
 	if elseNode != nil {
 		elseOp = cp.primaryOp(elseNode)
@@ -703,14 +832,14 @@ func compileTry(cp *compiler, fn *parse.Form) effectOp {
 		finallyOp = cp.primaryOp(finallyNode)
 	}
 
-	return &tryOp{fn.Range(), bodyOp, exceptVar, exceptOp, elseOp, finallyOp}
+	return &tryOp{fn.Range(), bodyOp, catchVar, catchOp, elseOp, finallyOp}
 }
 
 type tryOp struct {
 	diag.Ranging
 	bodyOp    valuesOp
-	exceptVar lvalue
-	exceptOp  valuesOp
+	catchVar  lvalue
+	catchOp   valuesOp
 	elseOp    valuesOp
 	finallyOp valuesOp
 }
@@ -718,35 +847,35 @@ type tryOp struct {
 func (op *tryOp) exec(fm *Frame) Exception {
 	body := execLambdaOp(fm, op.bodyOp)
 	var exceptVar vars.Var
-	if op.exceptVar.ref != nil {
+	if op.catchVar.ref != nil {
 		var err error
-		exceptVar, err = derefLValue(fm, op.exceptVar)
+		exceptVar, err = derefLValue(fm, op.catchVar)
 		if err != nil {
 			return fm.errorp(op, err)
 		}
 	}
-	except := execLambdaOp(fm, op.exceptOp)
+	catch := execLambdaOp(fm, op.catchOp)
 	elseFn := execLambdaOp(fm, op.elseOp)
 	finally := execLambdaOp(fm, op.finallyOp)
 
-	err := body.Call(fm.Fork("try body"), NoArgs, NoOpts)
+	err := body.Call(fm.Fork(), NoArgs, NoOpts)
 	if err != nil {
-		if except != nil {
+		if catch != nil {
 			if exceptVar != nil {
 				err := exceptVar.Set(err.(Exception))
 				if err != nil {
-					return fm.errorp(op.exceptVar, err)
+					return fm.errorp(op.catchVar, err)
 				}
 			}
-			err = except.Call(fm.Fork("try except"), NoArgs, NoOpts)
+			err = catch.Call(fm.Fork(), NoArgs, NoOpts)
 		}
 	} else {
 		if elseFn != nil {
-			err = elseFn.Call(fm.Fork("try else"), NoArgs, NoOpts)
+			err = elseFn.Call(fm.Fork(), NoArgs, NoOpts)
 		}
 	}
 	if finally != nil {
-		errFinally := finally.Call(fm.Fork("try finally"), NoArgs, NoOpts)
+		errFinally := finally.Call(fm.Fork(), NoArgs, NoOpts)
 		if errFinally != nil {
 			// TODO: If err is not nil, this discards err. Use something similar
 			// to pipeline exception to expose both.
@@ -758,16 +887,16 @@ func (op *tryOp) exec(fm *Frame) Exception {
 
 // PragmaForm = 'pragma' 'fallback-resolver' '=' { Compound }
 func compilePragma(cp *compiler, fn *parse.Form) effectOp {
-	args := cp.walkArgs(fn)
-	nameNode := args.next()
-	name := stringLiteralOrError(cp, nameNode, "pragma name")
-	eqNode := args.next()
-	eq := stringLiteralOrError(cp, eqNode, "literal =")
-	if eq != "=" {
-		cp.errorpf(eqNode, "must be literal =")
+	args := getArgs(cp, fn)
+	name := args.get(0, "pragma name").stringLiteral()
+	eq := args.get(1, "literal =").stringLiteral()
+	if args.has(1) && eq != "=" {
+		args.errorpf(fn.Args[1], "must be literal =")
 	}
-	valueNode := args.next()
-	args.mustEnd()
+	valueNode := args.get(2, "pragma value").any()
+	if !args.finish() {
+		return nil
+	}
 
 	switch name {
 	case "unknown-command":
@@ -778,11 +907,11 @@ func compilePragma(cp *compiler, fn *parse.Form) effectOp {
 		case "external":
 			cp.currentPragma().unknownCommandIsExternal = true
 		default:
-			cp.errorpf(valueNode,
+			cp.errorpfPartial(valueNode,
 				"invalid value for unknown-command: %s", parse.Quote(value))
 		}
 	default:
-		cp.errorpf(nameNode, "unknown pragma %s", parse.Quote(name))
+		cp.errorpfPartial(fn.Args[0], "unknown pragma %s", parse.Quote(name))
 	}
 	return nopOp{}
 }
@@ -791,7 +920,7 @@ func (cp *compiler) compileOneLValue(n *parse.Compound, f lvalueFlag) lvalue {
 	if len(n.Indexings) != 1 {
 		cp.errorpf(n, "must be valid lvalue")
 	}
-	lvalues := cp.parseIndexingLValue(n.Indexings[0], f)
+	lvalues := cp.compileIndexingLValue(n.Indexings[0], f)
 	if lvalues.rest != -1 {
 		cp.errorpf(lvalues.lvalues[lvalues.rest], "rest variable not allowed")
 	}

@@ -22,15 +22,18 @@ type Closure struct {
 	// The index of the rest argument. -1 if there is no rest argument.
 	RestArg     int
 	OptNames    []string
-	OptDefaults []interface{}
-	SrcMeta     parse.Source
+	OptDefaults []any
+	Src         parse.Source
 	DefRange    diag.Ranging
 	op          effectOp
 	newLocal    []staticVarInfo
 	captured    *Ns
 }
 
-var _ Callable = &Closure{}
+var (
+	_ Callable       = &Closure{}
+	_ vals.PseudoMap = &Closure{}
+)
 
 // Kind returns "fn".
 func (*Closure) Kind() string {
@@ -38,7 +41,7 @@ func (*Closure) Kind() string {
 }
 
 // Equal compares by address.
-func (c *Closure) Equal(rhs interface{}) bool {
+func (c *Closure) Equal(rhs any) bool {
 	return c == rhs
 }
 
@@ -47,13 +50,8 @@ func (c *Closure) Hash() uint32 {
 	return hash.Pointer(unsafe.Pointer(c))
 }
 
-// Repr returns an opaque representation "<closure 0x23333333>".
-func (c *Closure) Repr(int) string {
-	return fmt.Sprintf("<closure %p>", c)
-}
-
 // Call calls a closure.
-func (c *Closure) Call(fm *Frame, args []interface{}, opts map[string]interface{}) error {
+func (c *Closure) Call(fm *Frame, args []any, opts map[string]any) error {
 	// Check number of arguments.
 	if c.RestArg != -1 {
 		if len(args) < len(c.ArgNames)-1 {
@@ -137,7 +135,7 @@ func (c *Closure) Call(fm *Frame, args []interface{}, opts map[string]interface{
 	}
 
 	fm.local = local
-	fm.srcMeta = c.SrcMeta
+	fm.src = c.Src
 	fm.defers = new([]func(*Frame) Exception)
 	exc := c.op.exec(fm)
 	excDefer := fm.runDefers()
@@ -148,20 +146,15 @@ func (c *Closure) Call(fm *Frame, args []interface{}, opts map[string]interface{
 	return exc
 }
 
-var (
-	fnDefault = NewGoFn("nop~", nop)
-	nsDefault = &Ns{}
-)
-
 // MakeVarFromName creates a Var with a suitable type constraint inferred from
 // the name.
 func MakeVarFromName(name string) vars.Var {
 	switch {
 	case strings.HasSuffix(name, FnSuffix):
-		val := fnDefault
+		val := nopGoFn
 		return vars.FromPtr(&val)
 	case strings.HasSuffix(name, NsSuffix):
-		val := nsDefault
+		val := &Ns{}
 		return vars.FromPtr(&val)
 	default:
 		return vars.FromInit(nil)
@@ -181,16 +174,14 @@ func (er UnsupportedOptionsError) Error() string {
 	return fmt.Sprintf("unsupported options: %s", strings.Join(er.Options, ", "))
 }
 
-func (c *Closure) Fields() vals.StructMap { return closureFields{c} }
+func (c *Closure) Fields() vals.MethodMap { return closureFields{c} }
 
 type closureFields struct{ c *Closure }
 
-func (closureFields) IsStructMap() {}
-
-func (cf closureFields) ArgNames() vals.List { return vals.MakeListFromStrings(cf.c.ArgNames...) }
+func (cf closureFields) ArgNames() vals.List { return vals.MakeListSlice(cf.c.ArgNames) }
 func (cf closureFields) RestArg() string     { return strconv.Itoa(cf.c.RestArg) }
-func (cf closureFields) OptNames() vals.List { return vals.MakeListFromStrings(cf.c.OptNames...) }
-func (cf closureFields) Src() parse.Source   { return cf.c.SrcMeta }
+func (cf closureFields) OptNames() vals.List { return vals.MakeListSlice(cf.c.OptNames) }
+func (cf closureFields) Src() parse.Source   { return cf.c.Src }
 
 func (cf closureFields) OptDefaults() vals.List {
 	return vals.MakeList(cf.c.OptDefaults...)
@@ -198,9 +189,9 @@ func (cf closureFields) OptDefaults() vals.List {
 
 func (cf closureFields) Body() string {
 	r := cf.c.op.(diag.Ranger).Range()
-	return cf.c.SrcMeta.Code[r.From:r.To]
+	return cf.c.Src.Code[r.From:r.To]
 }
 
 func (cf closureFields) Def() string {
-	return cf.c.SrcMeta.Code[cf.c.DefRange.From:cf.c.DefRange.To]
+	return cf.c.Src.Code[cf.c.DefRange.From:cf.c.DefRange.To]
 }

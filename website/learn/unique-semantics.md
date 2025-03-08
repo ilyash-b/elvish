@@ -1,7 +1,5 @@
 <!-- toc -->
 
-<div class="clear"></div>
-
 The semantics of Elvish is unique in many aspects when compared to other shells.
 This can be surprising if you are used to other shells, and it is a result of
 the design choice of making Elvish a full-fledged programming language.
@@ -188,8 +186,8 @@ echo "after bad" # not executed
 ```
 
 (If you run this interactively, you need to enter a literal newline after `bad`
-by pressing <span class="key">Alt-Enter</span> to make sure that it is executed
-in the same chunk as `echo "after bad"`.)
+by pressing <kbd>Alt-Enter</kbd> to make sure that it is executed in the same
+chunk as `echo "after bad"`.)
 
 And, non-zero exit status from external commands are turned into exceptions:
 
@@ -321,7 +319,7 @@ without executing any of it. For instance, in Elvish unclosed parenthesis is an
 error during the parsing phase. The following code, when executed as a chunk,
 does nothing other than printing the parse error:
 
-```elvish-bad
+```elvish
 echo before
 echo (
 ```

@@ -1,6 +1,6 @@
 <!-- toc -->
 
-@module builtin pkg/eval
+@module builtin
 
 # Introduction
 
@@ -39,8 +39,8 @@ Nonetheless, the builtin module is also available as a
 ## Usage Notation
 
 The usage of a builtin command is described by giving an example usage, using
-variables as arguments. For instance, The `repeat` command takes two arguments
-and are described as:
+variables as arguments. For instance, the `repeat` command takes two arguments
+and is described as:
 
 ```elvish
 repeat $n $v
@@ -60,13 +60,13 @@ put $values...
 ```
 
 Options are given along with their default values. For instance, the `echo`
-command takes an `sep` option and arbitrary arguments:
+command takes a `sep` option and arbitrary arguments:
 
 ```elvish
 echo &sep=' ' $value...
 ```
 
-(When you calling functions, options are always optional.)
+(When you call functions, options are always optional.)
 
 ## Commands taking value inputs {#value-inputs}
 
@@ -84,8 +84,8 @@ in one of two ways:
     ```
 
     If the previous command outputs bytes, one line becomes one string input, as
-    if there is an implicit [`from-lines`](#from-lines) (this behavior is
-    subject to change):
+    if there is an implicit [`from-lines`]() (this behavior is subject to
+    change):
 
     ```elvish-transcript
     ~> print "a\nb\nc\n" | count # count number of lines
@@ -97,7 +97,7 @@ in one of two ways:
     ▶ C
     ```
 
-1.  From an argument -- an iterable value:
+2.  From an argument -- an iterable value:
 
     ```elvish-transcript
     ~> count [lorem ipsum] # count number of elements in argument
@@ -187,6 +187,3 @@ They are either only useful for debug purposes, or have known issues in the
 interface or implementation, and in the worst case will make Elvish crash.
 (Before 1.0, all features are subject to change, but those ones are sure to be
 changed.)
-
-Those functions and variables are documented near the end of the respective
-sections. Their known problem is also discussed.

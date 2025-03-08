@@ -47,9 +47,8 @@ type staticVarInfo struct {
 // CombineNs returns an *Ns that contains all the bindings from both ns1 and
 // ns2. Names in ns2 takes precedence over those in ns1.
 func CombineNs(ns1, ns2 *Ns) *Ns {
-	ns := &Ns{
-		append([]vars.Var(nil), ns2.slots...),
-		append([]staticVarInfo(nil), ns2.infos...)}
+	ns := ns2.clone()
+
 	hasName := map[string]bool{}
 	for _, info := range ns.infos {
 		if !info.deleted {
@@ -63,6 +62,12 @@ func CombineNs(ns1, ns2 *Ns) *Ns {
 		}
 	}
 	return ns
+}
+
+func (ns *Ns) clone() *Ns {
+	return &Ns{
+		append([]vars.Var(nil), ns.slots...),
+		append([]staticVarInfo(nil), ns.infos...)}
 }
 
 // Ns returns ns itself.
@@ -81,7 +86,7 @@ func (ns *Ns) Hash() uint32 {
 }
 
 // Equal returns whether rhs has the same identity as ns.
-func (ns *Ns) Equal(rhs interface{}) bool {
+func (ns *Ns) Equal(rhs any) bool {
 	if ns2, ok := rhs.(*Ns); ok {
 		return ns == ns2
 	}
@@ -95,8 +100,8 @@ func (ns *Ns) Repr(int) string {
 
 // Index looks up a variable with the given name, and returns its value if it
 // exists. This is only used for introspection from Elvish code; for
-// introspection from Go code, use IndexName.
-func (ns *Ns) Index(k interface{}) (interface{}, bool) {
+// introspection from Go code, use IndexString.
+func (ns *Ns) Index(k any) (any, bool) {
 	if ks, ok := k.(string); ok {
 		variable := ns.IndexString(ks)
 		if variable == nil {
@@ -107,7 +112,7 @@ func (ns *Ns) Index(k interface{}) (interface{}, bool) {
 	return nil, false
 }
 
-// IndexName looks up a variable with the given name, and returns its value if
+// IndexString looks up a variable with the given name, and returns its value if
 // it exists, or nil if it does not. This is the type-safe version of Index and
 // is useful for introspection from Go code.
 func (ns *Ns) IndexString(k string) vars.Var {
@@ -128,7 +133,7 @@ func (ns *Ns) lookup(k string) (staticVarInfo, int) {
 }
 
 // IterateKeys produces the names of all the variables in this Ns.
-func (ns *Ns) IterateKeys(f func(interface{}) bool) {
+func (ns *Ns) IterateKeys(f func(any) bool) {
 	for _, info := range ns.infos {
 		if info.deleted {
 			continue
@@ -175,7 +180,7 @@ func BuildNs() NsBuilder {
 	return BuildNsNamed("")
 }
 
-// BuildNs returns a helper for building an Ns with the given name. The name is
+// BuildNsNamed returns a helper for building an Ns with the given name. The name is
 // only used for the names of Go functions.
 func BuildNsNamed(name string) NsBuilder {
 	prefix := ""
@@ -185,7 +190,7 @@ func BuildNsNamed(name string) NsBuilder {
 	return NsBuilder{prefix, make(map[string]vars.Var)}
 }
 
-// Add adds a variable.
+// AddVar adds a variable.
 func (nb NsBuilder) AddVar(name string, v vars.Var) NsBuilder {
 	nb.m[name] = v
 	return nb
@@ -210,12 +215,12 @@ func (nb NsBuilder) AddNs(name string, v Nser) NsBuilder {
 }
 
 // AddGoFn adds a Go function. The resulting variable will be read-only.
-func (nb NsBuilder) AddGoFn(name string, impl interface{}) NsBuilder {
+func (nb NsBuilder) AddGoFn(name string, impl any) NsBuilder {
 	return nb.AddFn(name, NewGoFn(nb.prefix+name, impl))
 }
 
 // AddGoFns adds Go functions. The resulting variables will be read-only.
-func (nb NsBuilder) AddGoFns(fns map[string]interface{}) NsBuilder {
+func (nb NsBuilder) AddGoFns(fns map[string]any) NsBuilder {
 	for name, impl := range fns {
 		nb.AddGoFn(name, impl)
 	}

@@ -8,6 +8,13 @@ set after-command = [
   }
 ]
 
+set completion:arg-completer = [
+  &cd=         $complete-dirname~
+  &sudo=       $complete-sudo~
+  &doc:show=   {|@a| use doc; doc:-symbols }
+  &doc:source= {|@a| use doc; doc:-symbols }
+]
+
 set global-binding = (binding-table [
   &Ctrl-'['= $close-mode~
   &Alt-x=    $minibuf:start~
@@ -35,6 +42,7 @@ set insert:binding = (binding-table [
   &Ctrl-K=    $kill-line-right~
 
   &Ctrl-V= $insert-raw~
+  &Ctrl-Alt-V= $-insert-key-name~
 
   &Alt-,=  $lastcmd:start~
   &Alt-.=  $insert-last-word~
@@ -43,8 +51,11 @@ set insert:binding = (binding-table [
   &Ctrl-N= $navigation:start~
   &Tab=    $completion:smart-start~
   &Up=     $history:start~
+  &Down=   $end-of-history~
 
   &Alt-Enter={ insert-at-dot "\n" }
+
+  &Ctrl-A= $apply-autofix~
 
   &Enter=   $smart-enter~
   &Ctrl-D=  $return-eof~
@@ -57,6 +68,7 @@ set command:binding = (binding-table [
   &b=   $move-dot-left-word~
   &h=   $move-dot-left~
   &i=   $close-mode~
+  &a=   { $move-dot-right~; $close-mode~ }
   &j=   $move-dot-down~
   &k=   $move-dot-up~
   &l=   $move-dot-right~
@@ -67,6 +79,8 @@ set command:binding = (binding-table [
 set listing:binding = (binding-table [
   &Up=        $listing:up~
   &Down=      $listing:down~
+  &PageUp=    $listing:page-up~
+  &PageDown=  $listing:page-down~
   &Tab=       $listing:down-cycle~
   &Shift-Tab= $listing:up-cycle~
 ])

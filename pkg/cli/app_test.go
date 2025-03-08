@@ -187,7 +187,7 @@ func TestReadCode_LetsCodeAreaHandleEvents(t *testing.T) {
 func TestReadCode_ShowsHighlightedCode(t *testing.T) {
 	f := Setup(withHighlighter(
 		testHighlighter{
-			get: func(code string) (ui.Text, []error) {
+			get: func(code string) (ui.Text, []ui.Text) {
 				return ui.T(code, ui.FgRed), nil
 			},
 		}))
@@ -198,12 +198,12 @@ func TestReadCode_ShowsHighlightedCode(t *testing.T) {
 	f.TTY.TestBuffer(t, wantBuf)
 }
 
-func TestReadCode_ShowsErrorsFromHighlighter(t *testing.T) {
+func TestReadCode_ShowsErrorsFromHighlighter_ExceptInFinalRedraw(t *testing.T) {
 	f := Setup(withHighlighter(
 		testHighlighter{
-			get: func(code string) (ui.Text, []error) {
-				errors := []error{errors.New("ERR 1"), errors.New("ERR 2")}
-				return ui.T(code), errors
+			get: func(code string) (ui.Text, []ui.Text) {
+				tips := []ui.Text{ui.T("ERR 1"), ui.T("ERR 2")}
+				return ui.T(code), tips
 			},
 		}))
 	defer f.Stop()
@@ -215,12 +215,15 @@ func TestReadCode_ShowsErrorsFromHighlighter(t *testing.T) {
 		Write("ERR 1").Newline().
 		Write("ERR 2").Buffer()
 	f.TTY.TestBuffer(t, wantBuf)
+
+	feedInput(f.TTY, "\n")
+	f.TestTTY(t, "code", "\n", term.DotHere)
 }
 
 func TestReadCode_RedrawsOnLateUpdateFromHighlighter(t *testing.T) {
 	var styling ui.Styling
 	hl := testHighlighter{
-		get: func(code string) (ui.Text, []error) {
+		get: func(code string) (ui.Text, []ui.Text) {
 			return ui.T(code, styling), nil
 		},
 		lateUpdates: make(chan struct{}),
@@ -428,7 +431,7 @@ type testAddon struct {
 
 func (a testAddon) Focus() bool { return a.focus }
 
-// Misc features.
+// Event handling.
 
 func TestReadCode_UsesGlobalBindingsWithCodeAreaTarget(t *testing.T) {
 	testGlobalBindings(t, nil)
@@ -475,6 +478,17 @@ func TestReadCode_DoesNotUseGlobalBindingsIfHandledByWidget(t *testing.T) {
 	f.TestTTY(t, "a", term.DotHere)
 }
 
+func TestReadCode_NotifiesAboutUnboundKey(t *testing.T) {
+	f := Setup()
+	defer f.Stop()
+
+	f.TTY.Inject(term.K(ui.F1))
+
+	f.TTY.TestMsg(t, ui.T("Unbound key: F1"))
+}
+
+// Misc features.
+
 func TestReadCode_TrimsBufferToMaxHeight(t *testing.T) {
 	f := Setup(func(spec *AppSpec, tty TTYCtrl) {
 		spec.MaxHeight = func() int { return 2 }
@@ -517,9 +531,8 @@ func TestReadCode_ShowNotes(t *testing.T) {
 	f.App.Notify(ui.T("note 2"))
 	unblock <- struct{}{}
 
-	// Test that the note is rendered onto the notes buffer.
-	wantNotesBuf := bb().Write("note").Newline().Write("note 2").Buffer()
-	f.TTY.TestNotesBuffer(t, wantNotesBuf)
+	// Test that the message is rendered.
+	f.TTY.TestMsg(t, ui.T("note\nnote 2"))
 
 	// Test that notes are flushed after being rendered.
 	if n := len(f.App.CopyState().Notes); n > 0 {
@@ -581,11 +594,11 @@ func feedInput(ttyCtrl TTYCtrl, input string) {
 
 // A Highlighter implementation useful for testing.
 type testHighlighter struct {
-	get         func(code string) (ui.Text, []error)
+	get         func(code string) (ui.Text, []ui.Text)
 	lateUpdates chan struct{}
 }
 
-func (hl testHighlighter) Get(code string) (ui.Text, []error) {
+func (hl testHighlighter) Get(code string) (ui.Text, []ui.Text) {
 	return hl.get(code)
 }
 

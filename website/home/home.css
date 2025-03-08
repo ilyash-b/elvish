@@ -1,0 +1,146 @@
+:root {
+  --ttyshot-width: 450px;
+}
+
+/* Cancel the global width restriction. Content on the homepage still respect
+   the 800px width, but they may have different background colors that span the
+   entire width. */
+#main {
+  max-width: none;
+  padding: 0;
+}
+
+/* Intro layout. */
+.intro {
+  margin: auto;
+  display: flex;
+  flex-direction: column;
+  /* Replicate the width restriction of #main. */
+  max-width: 832px;
+  /* Replicate the padding of #main, and add some padding-bottom. */
+  padding: 0 16px 32px;
+}
+
+.intro .intro-content {
+  padding-bottom: 8px;
+}
+
+.intro .action {
+  display: flex;
+  column-gap: 16px;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.intro .action a {
+  width: fit-content;
+  height: 40px;
+  padding: 0 16px;
+  border: 1px solid;
+  border-radius: 5px;
+  font-family: var(--sans-font);
+  color: black;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.dark .intro .action a {
+  color: white;
+}
+
+.intro .action a.primary {
+  border-color: green;
+  background-color: green;
+  color: white;
+  box-shadow: 0 0.125rem 0.3125rem 0 rgba(0, 0, 0, 0.2);
+}
+
+.button.community::before {
+  font-family: "fa-elv-sh";
+  content: var(--icon-chat);
+  font-size: 0.9em;
+  font-weight: normal;
+  margin-top: -0.1em;
+  padding-right: 0.3em;
+  /* color: var(--deep-orange-500); */
+}
+
+/* Section layout. */
+section {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 20px;
+  /* Sections usually end with a block that already has some margin-bottom, so
+     only add a small amount. */
+  padding-bottom: 12px;
+}
+
+section:nth-child(even) {
+  background-color: #f0f0f0;
+}
+
+.dark section:nth-child(even) {
+  background-color: #252525;
+}
+
+/* Replicate the width restriction of #main on the children of <section>.
+   The <section> itself may need to have a gray background, so must be full
+   width. */
+section > header, section > .content {
+  /* We want to left-justify the text in <header>, so we need to set an explicit
+     width. Using "max-width: 832px" causes the text to be centered. */
+  width: min(832px, 100%);
+  padding: 0 16px;
+}
+
+section > header, .column > header {
+  font-family: var(--sans-font);
+  font-size: 1.3em;
+  font-weight: bold;
+}
+
+.content {
+  /* When the screen is wide enough, .showcase.content has pairs of <p> and
+     <pre> side by side. To simplify the markup, instead of grouping each pair
+     in a container, we rely on flex wrapping to achieve the desired layout.
+     
+     .columns.content has pairs of .column side by side when the screen is wide
+     enough. */
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+}
+
+.showcase.content > p {
+  /* The extra 20px becomes the gap between <p> and <pre> due to
+     "justify-content: space-between". */
+  width: calc(800px - var(--ttyshot-width) - 20px);
+}
+
+.showcase.content > pre {
+  /* Ttyshots need to have a fixed width, so give all <pre>s the same width
+     according to ttyshots. */
+  width: var(--ttyshot-width);
+}
+
+.column {
+  width: 400px;
+}
+
+/* The side-by-side arrangement of <p> and <pre> pairs in each .showcase.content
+   assume a total width of 800px. When the content is no longer that wide,
+   arrange them vertically instead. */
+@media screen and (max-width: 831px) {
+  /* Make the width of <p> 100% and flex-flow will take care of the layout
+     change. Also make non-ttyshot blocks 100% to look a bit nicer. */
+  .showcase.content > p, .showcase.content > pre:not(.language-ttyshot), .columns.content > .column {
+    width: 100%;
+  }
+
+  /* This is somewhat hacky. Ideally we should also give it a gray background. */
+  .column:nth-child(even) {
+    padding-top: 8px;
+  }
+}

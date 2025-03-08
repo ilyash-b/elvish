@@ -7,7 +7,6 @@ package daemon
 
 import (
 	"net"
-	"net/rpc"
 	"os"
 	"os/signal"
 	"syscall"
@@ -15,27 +14,39 @@ import (
 	"src.elv.sh/pkg/daemon/internal/api"
 	"src.elv.sh/pkg/logutil"
 	"src.elv.sh/pkg/prog"
+	"src.elv.sh/pkg/rpc"
 	"src.elv.sh/pkg/store"
 )
 
 var logger = logutil.GetLogger("[daemon] ")
 
 // Program is the daemon subprogram.
-var Program prog.Program = program{}
-
-type program struct {
-	ServeOpts ServeOpts
+type Program struct {
+	run   bool
+	paths *prog.DaemonPaths
+	// Used in tests.
+	serveOpts ServeOpts
 }
 
-func (p program) Run(fds [3]*os.File, f *prog.Flags, args []string) error {
-	if !f.Daemon {
-		return prog.ErrNotSuitable
+func (p *Program) RegisterFlags(fs *prog.FlagSet) {
+	fs.BoolVar(&p.run, "daemon", false,
+		"[internal flag] Run the storage daemon instead of an Elvish shell")
+	p.paths = fs.DaemonPaths()
+}
+
+func (p *Program) Run(fds [3]*os.File, args []string) error {
+	if !p.run {
+		return prog.NextProgram()
 	}
 	if len(args) > 0 {
 		return prog.BadUsage("arguments are not allowed with -daemon")
 	}
+
+	// The stdout is redirected to a unique log file (see the spawn function),
+	// so just use it for logging.
+	logutil.SetOutput(fds[1])
 	setUmaskForDaemon()
-	exit := Serve(f.Sock, f.DB, p.ServeOpts)
+	exit := Serve(p.paths.Sock, p.paths.DB, p.serveOpts)
 	return prog.Exit(exit)
 }
 
@@ -52,7 +63,7 @@ type ServeOpts struct {
 
 // Serve runs the daemon service, listening on the socket specified by sockpath
 // and serving data from dbpath until all clients have exited. See doc for
-// ServeChans for additional options.
+// ServeOpts for additional options.
 func Serve(sockpath, dbpath string, opts ServeOpts) int {
 	logger.Println("pid is", syscall.Getpid())
 	logger.Println("going to listen", sockpath)
@@ -106,10 +117,9 @@ func Serve(sockpath, dbpath string, opts ServeOpts) int {
 		}
 		logger.Printf("going to close %v active connections", len(conns))
 		for conn := range conns {
-			err := conn.Close()
-			if err != nil {
-				logger.Println("failed to close connection:", err)
-			}
+			// Ignore the error - if we can't close the connection it's because
+			// the client has closed it. There is nothing we can do anyway.
+			conn.Close()
 		}
 	}
 
